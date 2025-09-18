@@ -1,0 +1,824 @@
+"""
+Academic-standard visualization framework for MovieLens CF analysis
+Inspired by VMamba project's elegant academic visualization style
+"""
+
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+import seaborn as sns
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
+from typing import Dict, List, Tuple, Optional, Union
+import os
+from scipy.sparse import csr_matrix
+from matplotlib.colors import LinearSegmentedColormap
+import matplotlib.gridspec as gridspec
+from matplotlib.patches import Rectangle
+import warnings
+warnings.filterwarnings('ignore')
+
+from config import cfg
+from utils.logger import get_logger
+
+logger = get_logger("Visualizer")
+
+class AcademicVisualizer:
+    """
+    Academic-standard visualization suite for collaborative filtering analysis
+
+    Provides publication-ready plots and interactive visualizations for:
+    - Dataset analysis and statistics
+    - Model performance comparison
+    - Similarity analysis
+    - Recommendation quality assessment
+    """
+
+    def __init__(self, config=None):
+        """
+        Initialize visualizer with VMamba-inspired academic styling
+
+        Args:
+            config: Configuration object
+        """
+        self.config = config or cfg
+        self._setup_academic_style()
+
+    def _setup_academic_style(self):
+        """Setup VMamba-inspired academic styling for plots"""
+        # VMamba-inspired color palette - sophisticated and academic
+        self.vmamba_colors = {
+            'primary': '#2E5BBA',      # Professional blue
+            'secondary': '#8B4E9C',    # Elegant purple
+            'accent': '#E67E22',       # Warm orange
+            'success': '#27AE60',      # Professional green
+            'warning': '#F39C12',      # Academic gold
+            'error': '#E74C3C',        # Attention red
+            'neutral_dark': '#2C3E50', # Dark slate
+            'neutral_light': '#ECF0F1' # Light gray
+        }
+
+        # Create academic color palette
+        self.color_palette = [
+            self.vmamba_colors['primary'],
+            self.vmamba_colors['accent'],
+            self.vmamba_colors['success'],
+            self.vmamba_colors['secondary'],
+            self.vmamba_colors['warning'],
+            self.vmamba_colors['error'],
+            self.vmamba_colors['neutral_dark']
+        ]
+
+        # Performance color scheme (inspired by VMamba performance charts)
+        self.performance_colors = {
+            'excellent': '#27AE60',    # Green for best performance
+            'good': '#2E5BBA',         # Blue for good performance
+            'average': '#F39C12',      # Orange for average
+            'poor': '#E74C3C'          # Red for poor performance
+        }
+
+        # Set academic-standard matplotlib parameters
+        plt.rcParams.update({
+            'font.family': 'serif',
+            'font.serif': ['Times New Roman', 'DejaVu Serif', 'serif'],
+            'font.size': 11,
+            'axes.titlesize': 13,
+            'axes.labelsize': 11,
+            'axes.titleweight': 'bold',
+            'xtick.labelsize': 9,
+            'ytick.labelsize': 9,
+            'legend.fontsize': 10,
+            'figure.titlesize': 15,
+            'figure.titleweight': 'bold',
+            'figure.dpi': self.config.visualization.dpi,
+            'savefig.dpi': self.config.visualization.dpi,
+            'savefig.bbox': 'tight',
+            'savefig.pad_inches': 0.15,
+            'axes.grid': True,
+            'axes.axisbelow': True,
+            'axes.edgecolor': '#2C3E50',
+            'axes.linewidth': 0.8,
+            'grid.color': '#BDC3C7',
+            'grid.linewidth': 0.5,
+            'xtick.color': '#2C3E50',
+            'ytick.color': '#2C3E50',
+            'text.color': '#2C3E50'
+        })
+
+        # Create custom colormaps
+        self._create_custom_colormaps()
+
+    def _create_custom_colormaps(self):
+        """Create custom colormaps inspired by VMamba visualizations"""
+        # Academic heatmap colormap
+        colors_heatmap = ['#ECF0F1', '#3498DB', '#2E5BBA', '#1B4F72']
+        self.academic_cmap = LinearSegmentedColormap.from_list('academic', colors_heatmap)
+
+        # Performance gradient colormap
+        colors_perf = [self.performance_colors['poor'],
+                      self.performance_colors['average'],
+                      self.performance_colors['good'],
+                      self.performance_colors['excellent']]
+        self.performance_cmap = LinearSegmentedColormap.from_list('performance', colors_perf)
+
+    def plot_dataset_statistics(self, stats: Dict, save_path: Optional[str] = None) -> plt.Figure:
+        """
+        Plot comprehensive dataset statistics with VMamba-inspired styling
+
+        Args:
+            stats: Dataset statistics dictionary
+            save_path: Path to save the plot
+
+        Returns:
+            matplotlib Figure object
+        """
+        logger.info("Creating VMamba-style dataset statistics visualization...")
+
+        # Create figure with professional layout
+        fig = plt.figure(figsize=(16, 10))
+        gs = gridspec.GridSpec(3, 4, hspace=0.4, wspace=0.3)
+
+        # Main title with academic styling
+        fig.suptitle('MovieLens Dataset Analysis', fontsize=18, fontweight='bold', y=0.95)
+
+        # 1. Dataset Overview (spans 2 columns)
+        ax1 = fig.add_subplot(gs[0, :2])
+        basic_stats = ['Users', 'Items', 'Ratings']
+        values = [stats['n_users'], stats['n_items'], stats['n_ratings']]
+
+        bars = ax1.bar(basic_stats, values, color=self.color_palette[:3],
+                      edgecolor='white', linewidth=1.5, alpha=0.8)
+        ax1.set_title('Dataset Overview', fontweight='bold', pad=15)
+        ax1.set_ylabel('Count', fontweight='bold')
+
+        # Add elegant value labels
+        for bar, value in zip(bars, values):
+            height = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
+                    f'{value:,}', ha='center', va='bottom', fontweight='bold')
+
+        # 2. Sparsity Analysis (academic style pie chart)
+        ax2 = fig.add_subplot(gs[0, 2:])
+        sparsity = stats['sparsity']
+        density = 1 - sparsity
+
+        colors = [self.vmamba_colors['success'], self.vmamba_colors['neutral_light']]
+        wedges, texts, autotexts = ax2.pie([density, sparsity],
+                                          labels=['Density', 'Sparsity'],
+                                          autopct='%1.2f%%',
+                                          colors=colors,
+                                          startangle=90,
+                                          textprops={'fontweight': 'bold'})
+        ax2.set_title('Matrix Sparsity Analysis', fontweight='bold', pad=15)
+
+        # 3. Rating Distribution (elegant histogram)
+        ax3 = fig.add_subplot(gs[1, :2])
+        rating_dist = stats['rating_distribution']
+        ratings = list(rating_dist.keys())
+        counts = list(rating_dist.values())
+
+        bars = ax3.bar(ratings, counts, color=self.vmamba_colors['primary'],
+                      edgecolor='white', linewidth=1, alpha=0.8)
+        ax3.set_title('Rating Distribution', fontweight='bold', pad=15)
+        ax3.set_xlabel('Rating Score', fontweight='bold')
+        ax3.set_ylabel('Frequency', fontweight='bold')
+
+        # Add trend line
+        z = np.polyfit(ratings, counts, 2)
+        p = np.poly1d(z)
+        x_smooth = np.linspace(min(ratings), max(ratings), 100)
+        ax3.plot(x_smooth, p(x_smooth), color=self.vmamba_colors['accent'],
+                linewidth=2, alpha=0.7, linestyle='--')
+
+        # 4. User Activity Analysis
+        ax4 = fig.add_subplot(gs[1, 2:])
+        user_metrics = ['Mean', 'Std Dev', 'Min', 'Max']
+        user_values = [stats['mean_ratings_per_user'], stats['std_ratings_per_user'],
+                      stats['min_ratings_per_user'], stats['max_ratings_per_user']]
+
+        bars = ax4.bar(user_metrics, user_values, color=self.color_palette[1],
+                      edgecolor='white', linewidth=1.5, alpha=0.8)
+        ax4.set_title('User Activity Statistics', fontweight='bold', pad=15)
+        ax4.set_ylabel('Ratings per User', fontweight='bold')
+
+        for bar, value in zip(bars, user_values):
+            height = bar.get_height()
+            ax4.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
+                    f'{value:.1f}', ha='center', va='bottom', fontweight='bold')
+
+        # 5. Academic Summary Panel (VMamba-style information panel)
+        ax5 = fig.add_subplot(gs[2, :])
+        ax5.axis('off')
+
+        # Create information boxes similar to VMamba performance tables
+        info_data = [
+            ('Dataset Statistics', [
+                f"Total Users: {stats['n_users']:,}",
+                f"Total Items: {stats['n_items']:,}",
+                f"Total Ratings: {stats['n_ratings']:,}",
+                f"Density: {(1-sparsity)*100:.2f}%"
+            ]),
+            ('Rating Analysis', [
+                f"Mean Rating: {stats['mean_rating']:.3f}",
+                f"Rating Std: {stats['std_rating']:.3f}",
+                f"Min Rating: {min(rating_dist.keys()):.1f}",
+                f"Max Rating: {max(rating_dist.keys()):.1f}"
+            ]),
+            ('User Behavior', [
+                f"Avg Ratings/User: {stats['mean_ratings_per_user']:.1f}",
+                f"Most Active User: {stats['max_ratings_per_user']} ratings",
+                f"User Std Dev: {stats['std_ratings_per_user']:.1f}",
+                f"Min User Activity: {stats['min_ratings_per_user']}"
+            ]),
+            ('Item Popularity', [
+                f"Avg Ratings/Item: {stats['mean_ratings_per_item']:.1f}",
+                f"Most Popular Item: {stats['max_ratings_per_item']} ratings",
+                f"Item Std Dev: {stats['std_ratings_per_item']:.1f}",
+                f"Min Item Ratings: {stats['min_ratings_per_item']}"
+            ])
+        ]
+
+        # Create elegant information boxes
+        box_width = 0.22
+        box_height = 0.8
+        y_pos = 0.1
+
+        for i, (title, items) in enumerate(info_data):
+            x_pos = 0.02 + i * 0.24
+
+            # Create background rectangle
+            rect = Rectangle((x_pos, y_pos), box_width, box_height,
+                           facecolor=self.vmamba_colors['neutral_light'],
+                           edgecolor=self.vmamba_colors['primary'],
+                           linewidth=1.5, alpha=0.3)
+            ax5.add_patch(rect)
+
+            # Add title
+            ax5.text(x_pos + box_width/2, y_pos + box_height - 0.1, title,
+                    ha='center', va='top', fontweight='bold', fontsize=12,
+                    color=self.vmamba_colors['primary'])
+
+            # Add items
+            for j, item in enumerate(items):
+                ax5.text(x_pos + 0.01, y_pos + box_height - 0.25 - j*0.12, item,
+                        ha='left', va='top', fontsize=10,
+                        color=self.vmamba_colors['neutral_dark'])
+
+        if save_path:
+            self._save_figure(fig, save_path, 'dataset_statistics')
+
+        return fig
+
+    def plot_model_comparison(self, results: Dict[str, Dict],
+                             save_path: Optional[str] = None) -> plt.Figure:
+        """
+        VMamba-style model performance comparison
+
+        Args:
+            results: Dictionary mapping model names to their evaluation results
+            save_path: Path to save the plot
+
+        Returns:
+            matplotlib Figure object
+        """
+        logger.info("Creating VMamba-style model comparison visualization...")
+
+        # Extract model data
+        models = list(results.keys())
+
+        # Create figure with professional layout
+        fig = plt.figure(figsize=(16, 12))
+        gs = gridspec.GridSpec(3, 3, hspace=0.35, wspace=0.3)
+
+        # Main title
+        fig.suptitle('Collaborative Filtering Models Performance Analysis',
+                    fontsize=18, fontweight='bold', y=0.96)
+
+        # 1. Performance Overview (VMamba-style performance table)
+        ax1 = fig.add_subplot(gs[0, :])
+        ax1.axis('off')
+
+        # Extract key metrics
+        performance_data = []
+        for model in models:
+            rating_pred = results[model].get('rating_prediction', {})
+            timing = results[model].get('timing', {})
+
+            mae = rating_pred.get('mae', 0)
+            rmse = rating_pred.get('rmse', 0)
+            corr = rating_pred.get('pearson_correlation', 0)
+            train_time = timing.get('training_time', 0)
+
+            # Determine performance level based on MAE (lower is better)
+            if mae < 0.5:
+                perf_color = self.performance_colors['excellent']
+                perf_symbol = '★'
+            elif mae < 0.6:
+                perf_color = self.performance_colors['good']
+                perf_symbol = '▲'
+            elif mae < 0.7:
+                perf_color = self.performance_colors['average']
+                perf_symbol = '●'
+            else:
+                perf_color = self.performance_colors['poor']
+                perf_symbol = '▼'
+
+            performance_data.append([model, mae, rmse, corr, train_time, perf_color, perf_symbol])
+
+        # Create VMamba-style performance table
+        y_start = 0.8
+        col_widths = [0.2, 0.15, 0.15, 0.15, 0.15, 0.2]
+        headers = ['Model', 'MAE ↓', 'RMSE ↓', 'Correlation ↑', 'Time (s)', 'Performance']
+
+        # Draw headers
+        x_pos = 0.05
+        for i, (header, width) in enumerate(zip(headers, col_widths)):
+            rect = Rectangle((x_pos, y_start), width, 0.1,
+                           facecolor=self.vmamba_colors['primary'],
+                           alpha=0.8)
+            ax1.add_patch(rect)
+            ax1.text(x_pos + width/2, y_start + 0.05, header,
+                    ha='center', va='center', fontweight='bold',
+                    color='white', fontsize=11)
+            x_pos += width
+
+        # Draw data rows
+        for i, (model, mae, rmse, corr, time, color, symbol) in enumerate(performance_data):
+            y_pos = y_start - (i + 1) * 0.08
+            x_pos = 0.05
+
+            # Alternate row colors
+            row_color = self.vmamba_colors['neutral_light'] if i % 2 == 0 else 'white'
+
+            # Model name
+            rect = Rectangle((x_pos, y_pos), col_widths[0], 0.08,
+                           facecolor=row_color, alpha=0.5,
+                           edgecolor=self.vmamba_colors['primary'], linewidth=0.5)
+            ax1.add_patch(rect)
+            ax1.text(x_pos + col_widths[0]/2, y_pos + 0.04, model,
+                    ha='center', va='center', fontweight='bold', fontsize=10)
+            x_pos += col_widths[0]
+
+            # Metrics
+            values = [f'{mae:.3f}', f'{rmse:.3f}', f'{corr:.3f}', f'{time:.3f}']
+            for j, (value, width) in enumerate(zip(values, col_widths[1:5])):
+                rect = Rectangle((x_pos, y_pos), width, 0.08,
+                               facecolor=row_color, alpha=0.5,
+                               edgecolor=self.vmamba_colors['primary'], linewidth=0.5)
+                ax1.add_patch(rect)
+                ax1.text(x_pos + width/2, y_pos + 0.04, value,
+                        ha='center', va='center', fontsize=10)
+                x_pos += width
+
+            # Performance indicator
+            rect = Rectangle((x_pos, y_pos), col_widths[5], 0.08,
+                           facecolor=color, alpha=0.6,
+                           edgecolor=self.vmamba_colors['primary'], linewidth=0.5)
+            ax1.add_patch(rect)
+            ax1.text(x_pos + col_widths[5]/2, y_pos + 0.04, symbol,
+                    ha='center', va='center', fontweight='bold',
+                    color='white', fontsize=14)
+
+        ax1.set_xlim(0, 1)
+        ax1.set_ylim(0, 1)
+        ax1.set_title('Model Performance Summary', fontweight='bold', fontsize=14, pad=20)
+
+        # 2. Error Metrics Comparison (elegant bar chart)
+        ax2 = fig.add_subplot(gs[1, :2])
+        mae_values = [results[model]['rating_prediction'].get('mae', 0) for model in models]
+        rmse_values = [results[model]['rating_prediction'].get('rmse', 0) for model in models]
+
+        x = np.arange(len(models))
+        width = 0.35
+
+        bars1 = ax2.bar(x - width/2, mae_values, width, label='MAE',
+                       color=self.vmamba_colors['primary'], alpha=0.8,
+                       edgecolor='white', linewidth=1.5)
+        bars2 = ax2.bar(x + width/2, rmse_values, width, label='RMSE',
+                       color=self.vmamba_colors['accent'], alpha=0.8,
+                       edgecolor='white', linewidth=1.5)
+
+        ax2.set_xlabel('Models', fontweight='bold')
+        ax2.set_ylabel('Error Value', fontweight='bold')
+        ax2.set_title('Prediction Error Comparison', fontweight='bold', pad=15)
+        ax2.set_xticks(x)
+        ax2.set_xticklabels(models, rotation=45, ha='right')
+        ax2.legend(frameon=True, fancybox=True, shadow=True)
+
+        # Add value labels
+        for bars in [bars1, bars2]:
+            for bar in bars:
+                height = bar.get_height()
+                ax2.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
+                        f'{height:.3f}', ha='center', va='bottom',
+                        fontweight='bold', fontsize=9)
+
+        # 3. Correlation Analysis (radar-style)
+        ax3 = fig.add_subplot(gs[1, 2])
+        corr_values = [results[model]['rating_prediction'].get('pearson_correlation', 0) for model in models]
+
+        # Create performance-based colors
+        colors = []
+        for corr in corr_values:
+            if corr > 0.7:
+                colors.append(self.performance_colors['excellent'])
+            elif corr > 0.6:
+                colors.append(self.performance_colors['good'])
+            elif corr > 0.5:
+                colors.append(self.performance_colors['average'])
+            else:
+                colors.append(self.performance_colors['poor'])
+
+        bars = ax3.bar(models, corr_values, color=colors, alpha=0.8,
+                      edgecolor='white', linewidth=1.5)
+        ax3.set_title('Correlation Analysis', fontweight='bold', pad=15)
+        ax3.set_ylabel('Pearson Correlation', fontweight='bold')
+        ax3.set_xticklabels(models, rotation=45, ha='right')
+        ax3.set_ylim(0, 1)
+
+        for bar, value in zip(bars, corr_values):
+            height = bar.get_height()
+            ax3.text(bar.get_x() + bar.get_width()/2., height + 0.02,
+                    f'{value:.3f}', ha='center', va='bottom',
+                    fontweight='bold', fontsize=10)
+
+        # 4. Timing Analysis
+        ax4 = fig.add_subplot(gs[2, :2])
+        train_times = [results[model].get('timing', {}).get('training_time', 0) for model in models]
+        eval_times = [results[model].get('timing', {}).get('evaluation_time', 0) for model in models]
+
+        bars1 = ax4.bar(x - width/2, train_times, width, label='Training Time',
+                       color=self.vmamba_colors['success'], alpha=0.8,
+                       edgecolor='white', linewidth=1.5)
+        bars2 = ax4.bar(x + width/2, eval_times, width, label='Evaluation Time',
+                       color=self.vmamba_colors['warning'], alpha=0.8,
+                       edgecolor='white', linewidth=1.5)
+
+        ax4.set_xlabel('Models', fontweight='bold')
+        ax4.set_ylabel('Time (seconds)', fontweight='bold')
+        ax4.set_title('Computational Efficiency Analysis', fontweight='bold', pad=15)
+        ax4.set_xticks(x)
+        ax4.set_xticklabels(models, rotation=45, ha='right')
+        ax4.legend(frameon=True, fancybox=True, shadow=True)
+
+        # 5. Best Performance Highlight
+        ax5 = fig.add_subplot(gs[2, 2])
+        ax5.axis('off')
+
+        # Find best performing model
+        best_mae = min(mae_values)
+        best_model = models[mae_values.index(best_mae)]
+        best_corr = corr_values[mae_values.index(best_mae)]
+
+        # Create highlight box
+        rect = Rectangle((0.1, 0.1), 0.8, 0.8,
+                        facecolor=self.performance_colors['excellent'],
+                        alpha=0.2, edgecolor=self.performance_colors['excellent'],
+                        linewidth=2)
+        ax5.add_patch(rect)
+
+        ax5.text(0.5, 0.8, 'Best Model', ha='center', va='center',
+                fontweight='bold', fontsize=14,
+                color=self.performance_colors['excellent'])
+
+        ax5.text(0.5, 0.6, best_model, ha='center', va='center',
+                fontweight='bold', fontsize=16,
+                color=self.vmamba_colors['primary'])
+
+        ax5.text(0.5, 0.4, f'MAE: {best_mae:.3f}', ha='center', va='center',
+                fontweight='bold', fontsize=12,
+                color=self.vmamba_colors['neutral_dark'])
+
+        ax5.text(0.5, 0.25, f'Correlation: {best_corr:.3f}', ha='center', va='center',
+                fontweight='bold', fontsize=12,
+                color=self.vmamba_colors['neutral_dark'])
+
+        ax5.set_xlim(0, 1)
+        ax5.set_ylim(0, 1)
+
+        if save_path:
+            self._save_figure(fig, save_path, 'model_comparison')
+
+        return fig
+
+    def plot_similarity_heatmap(self, similarity_matrix: np.ndarray,
+                               title: str = "Similarity Matrix",
+                               sample_size: int = 100,
+                               save_path: Optional[str] = None) -> plt.Figure:
+        """
+        Plot similarity matrix heatmap
+
+        Args:
+            similarity_matrix: Similarity matrix to visualize
+            title: Plot title
+            sample_size: Number of entities to sample for visualization
+            save_path: Path to save the plot
+
+        Returns:
+            matplotlib Figure object
+        """
+        logger.info(f"Creating similarity heatmap: {title}")
+
+        # Sample for visualization if matrix is too large
+        if similarity_matrix.shape[0] > sample_size:
+            indices = np.random.choice(similarity_matrix.shape[0], sample_size, replace=False)
+            sampled_matrix = similarity_matrix[np.ix_(indices, indices)]
+        else:
+            sampled_matrix = similarity_matrix
+
+        fig, ax = plt.subplots(figsize=(10, 8))
+
+        im = ax.imshow(sampled_matrix, cmap='viridis', aspect='auto')
+
+        # Add colorbar
+        cbar = plt.colorbar(im, ax=ax)
+        cbar.set_label('Similarity Score')
+
+        ax.set_title(title)
+        ax.set_xlabel('Entity Index')
+        ax.set_ylabel('Entity Index')
+
+        if save_path:
+            self._save_figure(fig, save_path, f'similarity_heatmap_{title.lower().replace(" ", "_")}')
+
+        return fig
+
+    def plot_rating_distribution_analysis(self, ratings_data: pd.DataFrame,
+                                        save_path: Optional[str] = None) -> plt.Figure:
+        """
+        Detailed analysis of rating distributions
+
+        Args:
+            ratings_data: DataFrame with rating data
+            save_path: Path to save the plot
+
+        Returns:
+            matplotlib Figure object
+        """
+        logger.info("Creating rating distribution analysis...")
+
+        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+        fig.suptitle('Rating Distribution Analysis', fontsize=16, fontweight='bold')
+
+        # 1. Overall rating distribution
+        ax = axes[0, 0]
+        ratings_data['rating'].hist(bins=20, ax=ax, color=self.color_palette[0], alpha=0.7)
+        ax.set_title('Overall Rating Distribution')
+        ax.set_xlabel('Rating')
+        ax.set_ylabel('Frequency')
+
+        # 2. Rating distribution by user activity
+        ax = axes[0, 1]
+        user_activity = ratings_data.groupby('userId').size()
+
+        # Categorize users by activity
+        low_activity = user_activity[user_activity <= user_activity.quantile(0.33)]
+        med_activity = user_activity[(user_activity > user_activity.quantile(0.33)) &
+                                   (user_activity <= user_activity.quantile(0.67))]
+        high_activity = user_activity[user_activity > user_activity.quantile(0.67)]
+
+        low_ratings = ratings_data[ratings_data['userId'].isin(low_activity.index)]['rating']
+        med_ratings = ratings_data[ratings_data['userId'].isin(med_activity.index)]['rating']
+        high_ratings = ratings_data[ratings_data['userId'].isin(high_activity.index)]['rating']
+
+        ax.hist([low_ratings, med_ratings, high_ratings],
+               bins=10, label=['Low Activity', 'Medium Activity', 'High Activity'],
+               color=self.color_palette[:3], alpha=0.7)
+        ax.set_title('Rating Distribution by User Activity')
+        ax.set_xlabel('Rating')
+        ax.set_ylabel('Frequency')
+        ax.legend()
+
+        # 3. Rating distribution by item popularity
+        ax = axes[1, 0]
+        item_popularity = ratings_data.groupby('movieId').size()
+
+        # Categorize items by popularity
+        unpopular = item_popularity[item_popularity <= item_popularity.quantile(0.33)]
+        moderate = item_popularity[(item_popularity > item_popularity.quantile(0.33)) &
+                                 (item_popularity <= item_popularity.quantile(0.67))]
+        popular = item_popularity[item_popularity > item_popularity.quantile(0.67)]
+
+        unpopular_ratings = ratings_data[ratings_data['movieId'].isin(unpopular.index)]['rating']
+        moderate_ratings = ratings_data[ratings_data['movieId'].isin(moderate.index)]['rating']
+        popular_ratings = ratings_data[ratings_data['movieId'].isin(popular.index)]['rating']
+
+        ax.hist([unpopular_ratings, moderate_ratings, popular_ratings],
+               bins=10, label=['Unpopular', 'Moderate', 'Popular'],
+               color=self.color_palette[3:6], alpha=0.7)
+        ax.set_title('Rating Distribution by Item Popularity')
+        ax.set_xlabel('Rating')
+        ax.set_ylabel('Frequency')
+        ax.legend()
+
+        # 4. Box plot of ratings
+        ax = axes[1, 1]
+        ratings_data.boxplot(column='rating', ax=ax)
+        ax.set_title('Rating Distribution Box Plot')
+        ax.set_ylabel('Rating')
+
+        plt.tight_layout()
+
+        if save_path:
+            self._save_figure(fig, save_path, 'rating_distribution_analysis')
+
+        return fig
+
+    def plot_performance_metrics(self, metrics_data: Dict[str, Dict],
+                               save_path: Optional[str] = None) -> plt.Figure:
+        """
+        Plot detailed performance metrics analysis
+
+        Args:
+            metrics_data: Dictionary containing metrics for different k values
+            save_path: Path to save the plot
+
+        Returns:
+            matplotlib Figure object
+        """
+        logger.info("Creating performance metrics visualization...")
+
+        if not metrics_data:
+            logger.warning("No metrics data provided")
+            return plt.figure()
+
+        k_values = sorted(list(metrics_data.keys()))
+        metrics = ['precision', 'recall', 'f1', 'ndcg', 'hit_rate']
+
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+        fig.suptitle('Performance Metrics Analysis', fontsize=16, fontweight='bold')
+
+        # Plot each metric
+        for i, metric in enumerate(metrics):
+            if i < 5:  # We have 5 subplots
+                row = i // 3
+                col = i % 3
+                ax = axes[row, col]
+
+                values = [metrics_data[k].get(metric, 0) for k in k_values]
+
+                ax.plot(k_values, values, marker='o', linewidth=2,
+                       color=self.color_palette[i], markersize=8)
+                ax.set_title(f'{metric.upper()}@K')
+                ax.set_xlabel('K (Number of Recommendations)')
+                ax.set_ylabel(f'{metric.upper()} Score')
+                ax.grid(True, alpha=0.3)
+
+                # Add value labels
+                for k, value in zip(k_values, values):
+                    ax.annotate(f'{value:.3f}', (k, value),
+                              textcoords="offset points", xytext=(0,10), ha='center')
+
+        # Summary comparison
+        ax = axes[1, 2]
+        x = np.arange(len(k_values))
+        width = 0.15
+
+        for i, metric in enumerate(metrics):
+            values = [metrics_data[k].get(metric, 0) for k in k_values]
+            ax.bar(x + i*width, values, width, label=metric.upper(),
+                  color=self.color_palette[i])
+
+        ax.set_xlabel('K Values')
+        ax.set_ylabel('Score')
+        ax.set_title('Metrics Comparison')
+        ax.set_xticks(x + width * 2)
+        ax.set_xticklabels([f'K={k}' for k in k_values])
+        ax.legend()
+
+        plt.tight_layout()
+
+        if save_path:
+            self._save_figure(fig, save_path, 'performance_metrics')
+
+        return fig
+
+    def create_interactive_dashboard(self, results: Dict[str, Dict],
+                                   save_path: Optional[str] = None) -> str:
+        """
+        Create interactive dashboard using Plotly
+
+        Args:
+            results: Comprehensive results dictionary
+            save_path: Path to save the HTML file
+
+        Returns:
+            Path to saved HTML file
+        """
+        logger.info("Creating interactive dashboard...")
+
+        # Create subplots
+        fig = make_subplots(
+            rows=3, cols=2,
+            subplot_titles=('Model Comparison (MAE)', 'Model Comparison (RMSE)',
+                          'Ranking Metrics', 'Correlation Analysis',
+                          'Performance Trends', 'Summary Statistics'),
+            specs=[[{"secondary_y": False}, {"secondary_y": False}],
+                   [{"secondary_y": False}, {"secondary_y": False}],
+                   [{"secondary_y": False}, {"type": "table"}]]
+        )
+
+        models = list(results.keys())
+
+        # MAE comparison
+        mae_values = [results[model]['rating_prediction'].get('mae', 0) for model in models]
+        fig.add_trace(
+            go.Bar(x=models, y=mae_values, name='MAE', marker_color='blue'),
+            row=1, col=1
+        )
+
+        # RMSE comparison
+        rmse_values = [results[model]['rating_prediction'].get('rmse', 0) for model in models]
+        fig.add_trace(
+            go.Bar(x=models, y=rmse_values, name='RMSE', marker_color='orange'),
+            row=1, col=2
+        )
+
+        # Ranking metrics (if available)
+        if any('ranking' in results[model] for model in models):
+            precision_10 = [results[model]['ranking'].get(10, {}).get('precision', 0) for model in models]
+            recall_10 = [results[model]['ranking'].get(10, {}).get('recall', 0) for model in models]
+
+            fig.add_trace(
+                go.Scatter(x=models, y=precision_10, name='Precision@10', mode='markers+lines'),
+                row=2, col=1
+            )
+            fig.add_trace(
+                go.Scatter(x=models, y=recall_10, name='Recall@10', mode='markers+lines'),
+                row=2, col=1
+            )
+
+        # Update layout
+        fig.update_layout(
+            title_text="MovieLens CF Model Analysis Dashboard",
+            showlegend=True,
+            height=900
+        )
+
+        # Save as HTML
+        output_path = save_path or self.config.get_plot_path('interactive_dashboard.html')
+        fig.write_html(output_path)
+
+        logger.info(f"Interactive dashboard saved to: {output_path}")
+        return output_path
+
+    def _save_figure(self, fig: plt.Figure, base_path: str, filename: str):
+        """Save figure in multiple formats"""
+        if not self.config.visualization.save_plots:
+            return
+
+        os.makedirs(base_path, exist_ok=True)
+
+        for fmt in self.config.visualization.plot_formats:
+            filepath = os.path.join(base_path, f"{filename}.{fmt}")
+            try:
+                fig.savefig(filepath, format=fmt, dpi=self.config.visualization.dpi)
+                logger.info(f"Plot saved: {filepath}")
+            except Exception as e:
+                logger.error(f"Failed to save plot {filepath}: {e}")
+
+    def generate_all_visualizations(self, loader, models_results: Dict,
+                                  save_path: Optional[str] = None) -> Dict[str, str]:
+        """
+        Generate all visualizations for comprehensive analysis
+
+        Args:
+            loader: DataLoader instance with statistics
+            models_results: Dictionary of model evaluation results
+            save_path: Base path for saving plots
+
+        Returns:
+            Dictionary mapping plot names to file paths
+        """
+        logger.log_phase("Generating All Visualizations")
+
+        save_path = save_path or self.config.experiment.plots_dir
+        saved_plots = {}
+
+        try:
+            # Dataset statistics
+            if hasattr(loader, 'get_dataset_statistics'):
+                stats = loader.get_dataset_statistics()
+                fig = self.plot_dataset_statistics(stats, save_path)
+                saved_plots['dataset_statistics'] = save_path
+                plt.close(fig)
+
+            # Model comparison
+            if models_results:
+                fig = self.plot_model_comparison(models_results, save_path)
+                saved_plots['model_comparison'] = save_path
+                plt.close(fig)
+
+            # Interactive dashboard
+            if models_results:
+                dashboard_path = self.create_interactive_dashboard(models_results, save_path)
+                saved_plots['interactive_dashboard'] = dashboard_path
+
+            logger.info(f"Generated {len(saved_plots)} visualizations")
+
+        except Exception as e:
+            logger.error(f"Error generating visualizations: {e}")
+
+        return saved_plots
