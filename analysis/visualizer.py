@@ -22,6 +22,7 @@ warnings.filterwarnings('ignore')
 
 from config import cfg
 from utils.logger import get_logger
+from analysis.hyperparameter_optimizer import HyperparameterSearchResult
 
 logger = get_logger("Visualizer")
 
@@ -822,3 +823,419 @@ class AcademicVisualizer:
             logger.error(f"Error generating visualizations: {e}")
 
         return saved_plots
+
+    def plot_hyperparameter_analysis(self, hp_result: HyperparameterSearchResult,
+                                    save_path: Optional[str] = None) -> plt.Figure:
+        """
+        Create comprehensive hyperparameter analysis visualization
+
+        Args:
+            hp_result: Hyperparameter search results
+            save_path: Path to save the plot
+
+        Returns:
+            matplotlib Figure object
+        """
+        # Create figure with multiple subplots
+        fig = plt.figure(figsize=(16, 12))
+        gs = gridspec.GridSpec(3, 3, figure=fig, hspace=0.3, wspace=0.3)
+
+        # Main title
+        fig.suptitle('Hyperparameter Optimization Analysis',
+                    fontsize=16, fontweight='bold', y=0.98)
+
+        # 1. Search convergence plot
+        ax1 = fig.add_subplot(gs[0, :2])
+        self._plot_search_convergence(ax1, hp_result)
+
+        # 2. Best parameters summary
+        ax2 = fig.add_subplot(gs[0, 2])
+        self._plot_best_parameters_summary(ax2, hp_result)
+
+        # 3. Parameter sensitivity analysis
+        ax3 = fig.add_subplot(gs[1, :2])
+        self._plot_parameter_sensitivity(ax3, hp_result)
+
+        # 4. Score distribution
+        ax4 = fig.add_subplot(gs[1, 2])
+        self._plot_score_distribution(ax4, hp_result)
+
+        # 5. Model type comparison
+        ax5 = fig.add_subplot(gs[2, 0])
+        self._plot_model_type_comparison(ax5, hp_result)
+
+        # 6. Statistical significance
+        ax6 = fig.add_subplot(gs[2, 1])
+        self._plot_statistical_analysis(ax6, hp_result)
+
+        # 7. Parameter correlation heatmap
+        ax7 = fig.add_subplot(gs[2, 2])
+        self._plot_parameter_correlation(ax7, hp_result)
+
+        plt.tight_layout()
+
+        if save_path:
+            self._save_plot(fig, "hyperparameter_analysis", save_path)
+
+        return fig
+
+    def _plot_search_convergence(self, ax, hp_result: HyperparameterSearchResult):
+        """Plot search convergence curve"""
+        if not hp_result.search_history:
+            ax.text(0.5, 0.5, 'No Search History', ha='center', va='center',
+                   transform=ax.transAxes, fontsize=12)
+            return
+
+        iterations = [r['iteration'] for r in hp_result.search_history]
+        scores = [r['mean_score'] for r in hp_result.search_history]
+
+        # Plot convergence curve
+        ax.plot(iterations, scores, 'o-', color=self.vmamba_colors['primary'],
+               linewidth=2, markersize=4, alpha=0.7)
+
+        # Highlight best score
+        best_idx = hp_result.convergence_info.get('best_iteration', 0)
+        if best_idx < len(scores):
+            ax.plot(best_idx, scores[best_idx], 'o', color=self.vmamba_colors['success'],
+                   markersize=10, label=f'Best Score: {scores[best_idx]:.4f}')
+
+        ax.set_xlabel('Iteration')
+        ax.set_ylabel('Objective Score')
+        ax.set_title('Hyperparameter Search Convergence', fontweight='bold')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+    def _plot_best_parameters_summary(self, ax, hp_result: HyperparameterSearchResult):
+        """Plot best parameters summary as text box"""
+        ax.axis('off')
+
+        # Create elegant parameter summary box
+        summary_text = "Best Configuration\n\n"
+        if hp_result.best_params:
+            for param, value in hp_result.best_params.items():
+                summary_text += f"{param.replace('_', ' ').title()}: {value}\n"
+
+        summary_text += f"\nBest Score: {hp_result.best_score:.6f}"
+        summary_text += f"\nModel Type: {hp_result.best_model_type.replace('_', ' ').upper()}"
+
+        # Create styled text box
+        bbox_props = dict(boxstyle="round,pad=0.5", facecolor=self.vmamba_colors['neutral_light'],
+                         edgecolor=self.vmamba_colors['primary'], linewidth=2, alpha=0.8)
+
+        ax.text(0.1, 0.9, summary_text, transform=ax.transAxes, fontsize=10,
+               verticalalignment='top', bbox=bbox_props, family='monospace')
+
+    def _plot_parameter_sensitivity(self, ax, hp_result: HyperparameterSearchResult):
+        """Plot parameter sensitivity analysis"""
+        if not hp_result.all_results:
+            ax.text(0.5, 0.5, 'No Results Available', ha='center', va='center',
+                   transform=ax.transAxes, fontsize=12)
+            return
+
+        # Extract parameter values and scores
+        param_effects = {}
+        for result in hp_result.all_results:
+            params = result['parameters']
+            score = result['mean_score']
+
+            for param_name, param_value in params.items():
+                if param_name not in param_effects:
+                    param_effects[param_name] = {}
+                if param_value not in param_effects[param_name]:
+                    param_effects[param_name][param_value] = []
+                param_effects[param_name][param_value].append(score)
+
+        # Calculate average effects
+        param_names = []
+        param_ranges = []
+
+        for param_name, values_dict in param_effects.items():
+            if len(values_dict) > 1:  # Only plot parameters with multiple values
+                param_names.append(param_name.replace('_', ' ').title())
+                value_means = [np.mean(scores) for scores in values_dict.values()]
+                param_ranges.append(max(value_means) - min(value_means))
+
+        if param_names:
+            # Create horizontal bar plot
+            y_pos = np.arange(len(param_names))
+            bars = ax.barh(y_pos, param_ranges, color=self.vmamba_colors['accent'], alpha=0.7)
+
+            # Add value labels
+            for i, bar in enumerate(bars):
+                width = bar.get_width()
+                ax.text(width + max(param_ranges) * 0.01, bar.get_y() + bar.get_height()/2,
+                       f'{width:.4f}', ha='left', va='center', fontsize=9)
+
+            ax.set_yticks(y_pos)
+            ax.set_yticklabels(param_names)
+            ax.set_xlabel('Score Range')
+            ax.set_title('Parameter Sensitivity Analysis', fontweight='bold')
+
+    def _plot_score_distribution(self, ax, hp_result: HyperparameterSearchResult):
+        """Plot score distribution histogram"""
+        if not hp_result.all_results:
+            ax.text(0.5, 0.5, 'No Results Available', ha='center', va='center',
+                   transform=ax.transAxes, fontsize=12)
+            return
+
+        all_scores = [r['mean_score'] for r in hp_result.all_results]
+
+        # Create histogram
+        ax.hist(all_scores, bins=20, color=self.vmamba_colors['secondary'],
+               alpha=0.7, edgecolor='white', linewidth=1)
+
+        # Add best score line
+        ax.axvline(hp_result.best_score, color=self.vmamba_colors['success'],
+                  linestyle='--', linewidth=2, label=f'Best: {hp_result.best_score:.4f}')
+
+        # Add mean line
+        mean_score = np.mean(all_scores)
+        ax.axvline(mean_score, color=self.vmamba_colors['warning'],
+                  linestyle='--', linewidth=2, label=f'Mean: {mean_score:.4f}')
+
+        ax.set_xlabel('Score')
+        ax.set_ylabel('Frequency')
+        ax.set_title('Score Distribution', fontweight='bold')
+        ax.legend()
+
+    def _plot_model_type_comparison(self, ax, hp_result: HyperparameterSearchResult):
+        """Plot model type performance comparison"""
+        if not hp_result.statistical_analysis or 'model_comparison' not in hp_result.statistical_analysis:
+            ax.text(0.5, 0.5, 'No Model Comparison Data', ha='center', va='center',
+                   transform=ax.transAxes, fontsize=12)
+            return
+
+        model_comp = hp_result.statistical_analysis['model_comparison']
+
+        models = []
+        means = []
+        stds = []
+
+        for model_type, stats in model_comp.items():
+            if stats['mean'] is not None:
+                models.append(model_type.replace('_', ' ').upper())
+                means.append(stats['mean'])
+                stds.append(stats['std'] or 0)
+
+        if models:
+            x_pos = np.arange(len(models))
+            bars = ax.bar(x_pos, means, yerr=stds, capsize=5,
+                         color=[self.vmamba_colors['primary'], self.vmamba_colors['accent']][:len(models)],
+                         alpha=0.7, edgecolor='white', linewidth=1)
+
+            # Add value labels
+            for i, bar in enumerate(bars):
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height + stds[i] + max(means) * 0.01,
+                       f'{height:.4f}', ha='center', va='bottom', fontsize=9)
+
+            ax.set_xticks(x_pos)
+            ax.set_xticklabels(models)
+            ax.set_ylabel('Mean Score')
+            ax.set_title('Model Type Comparison', fontweight='bold')
+
+    def _plot_statistical_analysis(self, ax, hp_result: HyperparameterSearchResult):
+        """Plot statistical analysis results"""
+        ax.axis('off')
+
+        if not hp_result.statistical_analysis:
+            ax.text(0.5, 0.5, 'No Statistical Analysis', ha='center', va='center',
+                   transform=ax.transAxes, fontsize=12)
+            return
+
+        stats = hp_result.statistical_analysis
+
+        # Create statistical summary text
+        summary = "Statistical Analysis\n\n"
+        summary += f"Total Experiments: {stats.get('total_experiments', 'N/A')}\n"
+        summary += f"Overall Mean: {stats.get('overall_mean', 0):.4f}\n"
+        summary += f"Overall Std: {stats.get('overall_std', 0):.4f}\n\n"
+
+        if 'statistical_test' in stats:
+            test_info = stats['statistical_test']
+            summary += f"Statistical Test: {test_info['method'].title()}\n"
+            summary += f"P-value: {test_info.get('p_value', 0):.4f}\n"
+            significance = "Yes" if test_info.get('significant', False) else "No"
+            summary += f"Significant: {significance}"
+
+        # Style the text box
+        bbox_props = dict(boxstyle="round,pad=0.5", facecolor=self.vmamba_colors['neutral_light'],
+                         edgecolor=self.vmamba_colors['secondary'], linewidth=1, alpha=0.8)
+
+        ax.text(0.1, 0.9, summary, transform=ax.transAxes, fontsize=9,
+               verticalalignment='top', bbox=bbox_props, family='monospace')
+
+    def _plot_parameter_correlation(self, ax, hp_result: HyperparameterSearchResult):
+        """Plot parameter correlation heatmap"""
+        if not hp_result.all_results:
+            ax.text(0.5, 0.5, 'No Results Available', ha='center', va='center',
+                   transform=ax.transAxes, fontsize=12)
+            return
+
+        # Extract numeric parameters for correlation analysis
+        numeric_params = []
+        param_names = []
+
+        for result in hp_result.all_results:
+            params = result['parameters']
+            numeric_row = []
+
+            for param_name, param_value in params.items():
+                if isinstance(param_value, (int, float)):
+                    numeric_row.append(param_value)
+                    if param_name not in param_names:
+                        param_names.append(param_name)
+
+        if len(param_names) > 1:
+            # Convert to DataFrame and calculate correlation
+            param_df = pd.DataFrame(numeric_params, columns=param_names)
+            correlation_matrix = param_df.corr()
+
+            # Create heatmap
+            im = ax.imshow(correlation_matrix.values, cmap='RdBu_r', vmin=-1, vmax=1, aspect='auto')
+
+            # Add correlation values as text
+            for i in range(len(param_names)):
+                for j in range(len(param_names)):
+                    text_color = 'white' if abs(correlation_matrix.iloc[i, j]) > 0.5 else 'black'
+                    ax.text(j, i, f'{correlation_matrix.iloc[i, j]:.2f}',
+                           ha='center', va='center', color=text_color, fontsize=8)
+
+            # Set labels
+            ax.set_xticks(range(len(param_names)))
+            ax.set_yticks(range(len(param_names)))
+            ax.set_xticklabels([name.replace('_', ' ') for name in param_names], rotation=45)
+            ax.set_yticklabels([name.replace('_', ' ') for name in param_names])
+            ax.set_title('Parameter Correlation', fontweight='bold')
+
+            # Add colorbar
+            cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+            cbar.set_label('Correlation', rotation=270, labelpad=15)
+
+    def plot_hyperparameter_heatmap(self, hp_result: HyperparameterSearchResult,
+                                   param1: str, param2: str,
+                                   save_path: Optional[str] = None) -> plt.Figure:
+        """
+        Create 2D heatmap for two specific hyperparameters
+
+        Args:
+            hp_result: Hyperparameter search results
+            param1: First parameter name
+            param2: Second parameter name
+            save_path: Path to save the plot
+
+        Returns:
+            matplotlib Figure object
+        """
+        fig, ax = plt.subplots(figsize=(10, 8))
+
+        if not hp_result.all_results:
+            ax.text(0.5, 0.5, 'No Results Available', ha='center', va='center',
+                   transform=ax.transAxes, fontsize=14)
+            return fig
+
+        # Extract parameter values and scores
+        data_points = []
+        for result in hp_result.all_results:
+            params = result['parameters']
+            if param1 in params and param2 in params:
+                data_points.append({
+                    'param1': params[param1],
+                    'param2': params[param2],
+                    'score': result['mean_score']
+                })
+
+        if not data_points:
+            ax.text(0.5, 0.5, f'No data for {param1} vs {param2}',
+                   ha='center', va='center', transform=ax.transAxes, fontsize=14)
+            return fig
+
+        # Create DataFrame and pivot for heatmap
+        df = pd.DataFrame(data_points)
+        heatmap_data = df.pivot_table(values='score', index='param2', columns='param1', aggfunc='mean')
+
+        # Create heatmap
+        sns.heatmap(heatmap_data, annot=True, cmap='viridis', ax=ax,
+                   fmt='.4f', cbar_kws={'label': 'Score'})
+
+        ax.set_title(f'Hyperparameter Heatmap: {param1.replace("_", " ").title()} vs {param2.replace("_", " ").title()}',
+                    fontweight='bold', fontsize=14)
+        ax.set_xlabel(param1.replace('_', ' ').title())
+        ax.set_ylabel(param2.replace('_', ' ').title())
+
+        plt.tight_layout()
+
+        if save_path:
+            self._save_plot(fig, f"heatmap_{param1}_{param2}", save_path)
+
+        return fig
+
+    def create_hyperparameter_dashboard(self, hp_result: HyperparameterSearchResult,
+                                      save_path: Optional[str] = None) -> str:
+        """
+        Create interactive dashboard for hyperparameter analysis
+
+        Args:
+            hp_result: Hyperparameter search results
+            save_path: Path to save the dashboard
+
+        Returns:
+            Path to saved dashboard file
+        """
+        if not hp_result.all_results:
+            logger.warning("No results available for dashboard creation")
+            return ""
+
+        # Create subplots
+        fig = make_subplots(
+            rows=2, cols=3,
+            subplot_titles=('Search Progress', 'Score Distribution', 'Parameter Sensitivity',
+                          'Model Comparison', 'Best Parameters', 'Convergence Details'),
+            specs=[[{"type": "scatter"}, {"type": "histogram"}, {"type": "bar"}],
+                   [{"type": "bar"}, {"type": "table"}, {"type": "scatter"}]]
+        )
+
+        # 1. Search Progress
+        iterations = [r['iteration'] for r in hp_result.search_history]
+        scores = [r['mean_score'] for r in hp_result.search_history]
+
+        fig.add_trace(
+            go.Scatter(x=iterations, y=scores, mode='lines+markers',
+                      name='Search Progress', line=dict(color=self.vmamba_colors['primary'])),
+            row=1, col=1
+        )
+
+        # 2. Score Distribution
+        fig.add_trace(
+            go.Histogram(x=scores, name='Score Distribution',
+                        marker=dict(color=self.vmamba_colors['secondary'])),
+            row=1, col=2
+        )
+
+        # 3. Parameter Sensitivity (simplified)
+        param_names = list(hp_result.best_params.keys())[:5]  # Top 5 parameters
+        param_values = [str(hp_result.best_params[p]) for p in param_names]
+
+        fig.add_trace(
+            go.Bar(x=param_names, y=[1]*len(param_names), name='Best Parameters',
+                   text=param_values, textposition='auto',
+                   marker=dict(color=self.vmamba_colors['accent'])),
+            row=1, col=3
+        )
+
+        # Update layout
+        fig.update_layout(
+            title="Hyperparameter Optimization Dashboard",
+            title_font_size=16,
+            showlegend=False,
+            height=800
+        )
+
+        # Save dashboard
+        if save_path:
+            dashboard_file = os.path.join(save_path, "hyperparameter_dashboard.html")
+            fig.write_html(dashboard_file)
+            logger.info(f"Interactive dashboard saved: {dashboard_file}")
+            return dashboard_file
+
+        return ""

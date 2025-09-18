@@ -5,7 +5,97 @@ Following academic standards and research practices
 
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union, Any
+from enum import Enum
+
+class SearchMethod(Enum):
+    """Hyperparameter search methods"""
+    GRID_SEARCH = "grid_search"
+    RANDOM_SEARCH = "random_search"
+    BAYESIAN_OPTIMIZATION = "bayesian_optimization"
+
+class OptimizationObjective(Enum):
+    """Optimization objectives for hyperparameter tuning"""
+    MAE = "mae"
+    RMSE = "rmse"
+    PEARSON_CORRELATION = "pearson_correlation"
+    PRECISION_AT_K = "precision_at_k"
+    RECALL_AT_K = "recall_at_k"
+    NDCG_AT_K = "ndcg_at_k"
+    F1_AT_K = "f1_at_k"
+
+@dataclass
+class HyperparameterConfig:
+    """Hyperparameter search configuration for academic experiments"""
+
+    # Search method configuration
+    search_method: SearchMethod = SearchMethod.GRID_SEARCH
+    optimization_objective: OptimizationObjective = OptimizationObjective.RMSE
+    maximize_objective: bool = False  # False for error metrics (MAE, RMSE), True for performance metrics
+
+    # Cross-validation settings
+    cv_folds: int = 5
+    cv_random_state: int = 42
+
+    # Search space configuration
+    # User-based CF parameters
+    user_k_neighbors_range: List[int] = None
+    user_similarity_metrics: List[str] = None
+
+    # Item-based CF parameters
+    item_k_neighbors_range: List[int] = None
+    item_similarity_metrics: List[str] = None
+
+    # Data preprocessing parameters
+    min_ratings_per_user_range: List[int] = None
+    min_ratings_per_item_range: List[int] = None
+    train_ratio_range: List[float] = None
+
+    # General model parameters
+    prediction_threshold_range: List[float] = None
+
+    # Search algorithm parameters
+    n_iter_random_search: int = 100  # For random search
+    n_initial_points: int = 10       # For Bayesian optimization
+    acquisition_function: str = "EI" # Expected Improvement for Bayesian opt
+
+    # Parallel processing
+    n_jobs: int = -1  # Use all available cores
+
+    # Statistical testing
+    perform_statistical_tests: bool = True
+    statistical_test_method: str = "wilcoxon"  # wilcoxon, t_test, friedman
+    significance_level: float = 0.05
+
+    # Early stopping
+    enable_early_stopping: bool = False
+    early_stopping_patience: int = 10
+    early_stopping_min_delta: float = 0.001
+
+    def __post_init__(self):
+        if self.user_k_neighbors_range is None:
+            self.user_k_neighbors_range = [10, 20, 30, 50, 75, 100]
+
+        if self.user_similarity_metrics is None:
+            self.user_similarity_metrics = ["cosine", "pearson"]
+
+        if self.item_k_neighbors_range is None:
+            self.item_k_neighbors_range = [10, 20, 30, 50, 75, 100]
+
+        if self.item_similarity_metrics is None:
+            self.item_similarity_metrics = ["cosine", "pearson"]
+
+        if self.min_ratings_per_user_range is None:
+            self.min_ratings_per_user_range = [5, 10, 15, 20]
+
+        if self.min_ratings_per_item_range is None:
+            self.min_ratings_per_item_range = [5, 10, 15, 20]
+
+        if self.train_ratio_range is None:
+            self.train_ratio_range = [0.7, 0.8, 0.9]
+
+        if self.prediction_threshold_range is None:
+            self.prediction_threshold_range = [2.5, 3.0, 3.5, 4.0]
 
 @dataclass
 class DataConfig:
@@ -85,6 +175,7 @@ class Config:
         self.evaluation = EvaluationConfig()
         self.visualization = VisualizationConfig()
         self.experiment = ExperimentConfig()
+        self.hyperparameter = HyperparameterConfig()
 
         # Create necessary directories
         self._create_directories()
@@ -124,7 +215,8 @@ class Config:
             "model": self.model.__dict__,
             "evaluation": self.evaluation.__dict__,
             "visualization": self.visualization.__dict__,
-            "experiment": self.experiment.__dict__
+            "experiment": self.experiment.__dict__,
+            "hyperparameter": self.hyperparameter.__dict__
         }
 
 # Global configuration instance

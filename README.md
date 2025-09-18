@@ -24,6 +24,26 @@ python main.py --experiment-name "我的实验"
 
 # 禁用自动下载
 python main.py --no-download --data-path "/path/to/movielens/data"
+
+# 超参数优化
+python main.py --hyperparameter-search --search-method grid_search
+
+# 快速超参数搜索测试
+python main.py --hyperparameter-search --quick-test --cv-folds 3
+
+# 随机搜索超参数优化
+python main.py --hyperparameter-search --search-method random_search --n-trials 100
+```
+
+```bash
+# 完整超参数优化
+python main.py --hyperparameter-search
+
+# 自定义搜索参数
+python main.py --hyperparameter-search \
+               --search-method random_search \
+               --n-trials 50 \
+               --cv-folds 5
 ```
 
 ### 支持的数据集

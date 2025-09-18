@@ -147,6 +147,56 @@ class MovieLensLoader:
         self.ratings_df = processed_ratings
         return processed_ratings
 
+    def filter_sparse_users_items(self, min_user_ratings: int = None, min_item_ratings: int = None):
+        """
+        Filter users and items with minimum rating counts
+
+        Args:
+            min_user_ratings: Minimum number of ratings per user
+            min_item_ratings: Minimum number of ratings per item
+        """
+        if self.ratings_df is None:
+            raise ValueError("Data must be loaded first. Call load_data().")
+
+        # Use provided values or fall back to config
+        min_user_ratings = min_user_ratings if min_user_ratings is not None else self.config.data.min_ratings_per_user
+        min_item_ratings = min_item_ratings if min_item_ratings is not None else self.config.data.min_ratings_per_item
+
+        # Create a copy to avoid modifying original data
+        processed_ratings = self.ratings_df.copy()
+
+        # Filter users with minimum ratings
+        if min_user_ratings > 1:
+            user_counts = processed_ratings['userId'].value_counts()
+            valid_users = user_counts[user_counts >= min_user_ratings].index
+            processed_ratings = processed_ratings[processed_ratings['userId'].isin(valid_users)]
+
+        # Filter items with minimum ratings
+        if min_item_ratings > 1:
+            item_counts = processed_ratings['movieId'].value_counts()
+            valid_items = item_counts[item_counts >= min_item_ratings].index
+            processed_ratings = processed_ratings[processed_ratings['movieId'].isin(valid_items)]
+
+        # Update the ratings data
+        self.ratings_df = processed_ratings
+
+        # Recreate mappings for the filtered data
+        self._create_mappings()
+
+    def _create_mappings(self):
+        """Create user and item ID to index mappings"""
+        if self.ratings_df is None:
+            raise ValueError("Data must be loaded first.")
+
+        # Create user and item mappings
+        unique_users = sorted(self.ratings_df['userId'].unique())
+        unique_items = sorted(self.ratings_df['movieId'].unique())
+
+        self.user_mapping = {user_id: idx for idx, user_id in enumerate(unique_users)}
+        self.item_mapping = {item_id: idx for idx, item_id in enumerate(unique_items)}
+        self.inverse_user_mapping = {idx: user_id for user_id, idx in self.user_mapping.items()}
+        self.inverse_item_mapping = {idx: item_id for item_id, idx in self.item_mapping.items()}
+
     def create_user_item_matrix(self) -> csr_matrix:
         """
         Create user-item interaction matrix
@@ -159,14 +209,12 @@ class MovieLensLoader:
         if self.ratings_df is None:
             raise ValueError("Data must be preprocessed first.")
 
-        # Create user and item mappings
+        # Create mappings if they don't exist
+        if self.user_mapping is None or self.item_mapping is None:
+            self._create_mappings()
+
         unique_users = sorted(self.ratings_df['userId'].unique())
         unique_items = sorted(self.ratings_df['movieId'].unique())
-
-        self.user_mapping = {user_id: idx for idx, user_id in enumerate(unique_users)}
-        self.item_mapping = {item_id: idx for idx, item_id in enumerate(unique_items)}
-        self.inverse_user_mapping = {idx: user_id for user_id, idx in self.user_mapping.items()}
-        self.inverse_item_mapping = {idx: item_id for item_id, idx in self.item_mapping.items()}
 
         # Map to matrix indices
         user_indices = self.ratings_df['userId'].map(self.user_mapping)

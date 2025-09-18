@@ -22,6 +22,8 @@ from models.user_based_cf import UserBasedCollaborativeFiltering
 from models.item_based_cf import ItemBasedCollaborativeFiltering
 from evaluation.metrics import MetricsEvaluator
 from analysis.visualizer import AcademicVisualizer
+from analysis.hyperparameter_optimizer import AcademicHyperparameterOptimizer
+from analysis.academic_reporter import AcademicReporter
 
 def setup_experiment(experiment_name: Optional[str] = None):
     """
@@ -161,6 +163,179 @@ def run_baseline_experiments(logger, dataset_name: str = "ml-latest-small") -> D
         'data_loader': loader
     }
 
+def run_hyperparameter_search(logger, dataset_name: str = "ml-latest-small") -> Dict:
+    """
+    Run hyperparameter optimization experiments
+
+    Args:
+        logger: Logger instance
+        dataset_name: Name of MovieLens dataset to use
+
+    Returns:
+        Dictionary containing optimization results
+    """
+    logger.log_experiment_start(cfg.to_dict())
+    logger.log_phase("Starting Hyperparameter Optimization")
+
+    # Load and preprocess data
+    logger.log_phase("Data Loading and Preprocessing")
+    loader, train_df, test_df, user_item_matrix = load_movielens_data(
+        config=cfg,
+        dataset_name=dataset_name,
+        auto_download=True
+    )
+
+    # Log dataset statistics
+    stats = loader.get_dataset_statistics()
+    logger.log_metrics(stats, "Dataset Statistics")
+
+    # Initialize hyperparameter optimizer
+    optimizer = AcademicHyperparameterOptimizer(cfg.hyperparameter)
+
+    try:
+        # Run optimization
+        logger.log_phase("Running Hyperparameter Optimization")
+        hp_result = optimizer.optimize(loader, user_item_matrix, test_df)
+
+        # Save optimization results
+        logger.log_phase("Saving Hyperparameter Search Results")
+        results_file = optimizer.save_results(hp_result)
+
+        # Generate hyperparameter analysis visualizations
+        logger.log_phase("Generating Hyperparameter Analysis Visualizations")
+        visualizer = AcademicVisualizer(cfg)
+
+        try:
+            # Main hyperparameter analysis plot
+            hp_fig = visualizer.plot_hyperparameter_analysis(hp_result, cfg.experiment.plots_dir)
+            logger.info("Generated hyperparameter analysis plot")
+
+            # Create interactive dashboard
+            dashboard_path = visualizer.create_hyperparameter_dashboard(
+                hp_result, cfg.experiment.plots_dir
+            )
+            if dashboard_path:
+                logger.info(f"Generated interactive dashboard: {dashboard_path}")
+
+            # Generate specific parameter heatmaps for key parameters
+            key_params = ['k_neighbors', 'min_ratings_per_user', 'train_ratio']
+            for i, param1 in enumerate(key_params[:-1]):
+                for param2 in key_params[i+1:]:
+                    try:
+                        heatmap_fig = visualizer.plot_hyperparameter_heatmap(
+                            hp_result, param1, param2, cfg.experiment.plots_dir
+                        )
+                        logger.info(f"Generated heatmap: {param1} vs {param2}")
+                        plt.close(heatmap_fig)
+                    except Exception as e:
+                        logger.warning(f"Failed to generate heatmap {param1} vs {param2}: {e}")
+
+            plt.close(hp_fig)
+
+        except Exception as e:
+            logger.error(f"Error generating hyperparameter visualizations: {e}")
+
+        # Train best model with full dataset for comparison
+        logger.log_phase("Training Best Model on Full Dataset")
+        best_params = hp_result.best_params
+
+        if best_params['model_type'] == 'user_cf':
+            best_model = UserBasedCollaborativeFiltering(
+                similarity_metric=best_params['similarity_metric'],
+                k_neighbors=best_params['k_neighbors']
+            )
+        else:
+            best_model = ItemBasedCollaborativeFiltering(
+                similarity_metric=best_params['similarity_metric'],
+                k_neighbors=best_params['k_neighbors']
+            )
+
+        # Train on full dataset
+        best_model.fit(user_item_matrix)
+
+        # Evaluate best model
+        evaluator = MetricsEvaluator()
+        best_model_results = evaluator.comprehensive_evaluation(
+            model=best_model,
+            test_data=test_df,
+            user_item_matrix=user_item_matrix,
+            k_values=cfg.evaluation.top_k_recommendations,
+            threshold=cfg.model.prediction_threshold,
+            data_loader=loader
+        )
+
+        logger.log_experiment_end()
+
+        return {
+            'hyperparameter_results': hp_result,
+            'best_model_evaluation': best_model_results,
+            'dataset_stats': stats,
+            'data_loader': loader,
+            'results_file': results_file
+        }
+
+    except Exception as e:
+        logger.error(f"Hyperparameter optimization failed: {e}")
+        raise
+
+def print_hyperparameter_summary(results: Dict):
+    """
+    Print a summary of hyperparameter optimization results
+
+    Args:
+        results: Hyperparameter optimization results dictionary
+    """
+    print("\n" + "="*80)
+    print("HYPERPARAMETER OPTIMIZATION RESULTS")
+    print("="*80)
+
+    hp_result = results['hyperparameter_results']
+    stats = results['dataset_stats']
+
+    # Dataset summary
+    print(f"\nDataset Statistics:")
+    print(f"  Users: {stats['n_users']:,}")
+    print(f"  Items: {stats['n_items']:,}")
+    print(f"  Ratings: {stats['n_ratings']:,}")
+    print(f"  Sparsity: {stats['sparsity']:.4f}")
+
+    # Optimization summary
+    print(f"\nOptimization Summary:")
+    print(f"  Search Method: {cfg.hyperparameter.search_method.value}")
+    print(f"  Optimization Objective: {cfg.hyperparameter.optimization_objective.value}")
+    print(f"  Total Trials: {len(hp_result.all_results)}")
+    print(f"  Best Score: {hp_result.best_score:.6f}")
+    print(f"  Execution Time: {hp_result.execution_time:.2f} seconds")
+
+    # Best configuration
+    print(f"\nBest Configuration:")
+    print(f"  Model Type: {hp_result.best_model_type.replace('_', ' ').upper()}")
+    for param, value in hp_result.best_params.items():
+        print(f"  {param.replace('_', ' ').title()}: {value}")
+
+    # Statistical analysis
+    if hp_result.statistical_analysis:
+        stats_analysis = hp_result.statistical_analysis
+        print(f"\nStatistical Analysis:")
+        print(f"  Overall Mean Score: {stats_analysis.get('overall_mean', 0):.6f}")
+        print(f"  Overall Std Score: {stats_analysis.get('overall_std', 0):.6f}")
+
+        if 'statistical_test' in stats_analysis:
+            test_info = stats_analysis['statistical_test']
+            print(f"  Statistical Test: {test_info['method'].title()}")
+            print(f"  P-value: {test_info.get('p_value', 0):.4f}")
+            significance = "Yes" if test_info.get('significant', False) else "No"
+            print(f"  Statistically Significant: {significance}")
+
+    # Convergence info
+    if hp_result.convergence_info:
+        conv_info = hp_result.convergence_info
+        print(f"\nConvergence Information:")
+        print(f"  Best Found at Iteration: {conv_info.get('best_iteration', 'N/A')}")
+        print(f"  Early Stopping: {'Yes' if conv_info.get('early_stopping_triggered', False) else 'No'}")
+
+    print("\n" + "="*80)
+
 def save_results(results: Dict, stats: Dict, results_dir: str, logger):
     """
     Save experimental results in multiple formats
@@ -272,6 +447,17 @@ def main():
                        help='Run quick test with smaller dataset/parameters')
     parser.add_argument('--no-download', action='store_true',
                        help='Disable automatic dataset download')
+    parser.add_argument('--hyperparameter-search', action='store_true',
+                       help='Run hyperparameter optimization instead of baseline experiments')
+    parser.add_argument('--search-method', type=str, default='grid_search',
+                       choices=['grid_search', 'random_search'],
+                       help='Hyperparameter search method')
+    parser.add_argument('--n-trials', type=int, default=50,
+                       help='Number of trials for random search')
+    parser.add_argument('--cv-folds', type=int, default=3,
+                       help='Number of cross-validation folds for hyperparameter search')
+    parser.add_argument('--generate-report-only', action='store_true',
+                       help='Generate academic report from existing results (skip experiments)')
 
     args = parser.parse_args()
 
@@ -288,6 +474,23 @@ def main():
         # Use smallest dataset for quick test
         args.dataset = "ml-latest-small"
 
+    # Configure hyperparameter search
+    if args.hyperparameter_search:
+        from config import SearchMethod
+        cfg.hyperparameter.search_method = SearchMethod.GRID_SEARCH if args.search_method == 'grid_search' else SearchMethod.RANDOM_SEARCH
+        cfg.hyperparameter.n_iter_random_search = args.n_trials
+        cfg.hyperparameter.cv_folds = args.cv_folds
+
+        # For quick test with hyperparameter search, reduce search space
+        if args.quick_test:
+            cfg.hyperparameter.user_k_neighbors_range = [10, 20, 30]
+            cfg.hyperparameter.item_k_neighbors_range = [10, 20, 30]
+            cfg.hyperparameter.min_ratings_per_user_range = [5, 10]
+            cfg.hyperparameter.min_ratings_per_item_range = [5, 10]
+            cfg.hyperparameter.train_ratio_range = [0.8]
+            cfg.hyperparameter.prediction_threshold_range = [3.0]
+            cfg.hyperparameter.n_iter_random_search = 20
+
     # Setup experiment
     logger = setup_experiment(args.experiment_name)
 
@@ -303,11 +506,39 @@ def main():
             logger.info(f"  {status}: {dataset['name']} - {dataset['description']}")
 
     try:
-        # Run experiments
-        results = run_baseline_experiments(logger, args.dataset)
+        if args.hyperparameter_search:
+            # Run hyperparameter optimization
+            results = run_hyperparameter_search(logger, args.dataset)
+            # Print hyperparameter summary
+            print_hyperparameter_summary(results)
 
-        # Print summary
-        print_results_summary(results)
+            # Generate academic report
+            logger.info("Generating academic report for hyperparameter optimization")
+            reporter = AcademicReporter(cfg)
+            try:
+                report_path = reporter.generate_full_report(hp_results=results)
+                if report_path:
+                    print(f"\nAcademic report generated: {report_path}")
+                    print(f"Markdown version: {report_path.replace('.tex', '.md')}")
+            except Exception as e:
+                logger.warning(f"Failed to generate academic report: {e}")
+
+        else:
+            # Run baseline experiments
+            results = run_baseline_experiments(logger, args.dataset)
+            # Print baseline summary
+            print_results_summary(results)
+
+            # Generate academic report
+            logger.info("Generating academic report for baseline experiments")
+            reporter = AcademicReporter(cfg)
+            try:
+                report_path = reporter.generate_full_report(baseline_results=results)
+                if report_path:
+                    print(f"\nAcademic report generated: {report_path}")
+                    print(f"Markdown version: {report_path.replace('.tex', '.md')}")
+            except Exception as e:
+                logger.warning(f"Failed to generate academic report: {e}")
 
         # Print file locations
         print(f"\nResults saved in: {cfg.experiment.results_dir}")
