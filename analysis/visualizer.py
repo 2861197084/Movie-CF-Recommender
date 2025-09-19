@@ -11,7 +11,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
-from typing import Dict, List, Tuple, Optional, Union
+from typing import Dict, List, Tuple, Optional, Union, Set
 import os
 from scipy.sparse import csr_matrix
 from matplotlib.colors import LinearSegmentedColormap
@@ -1207,45 +1207,53 @@ class AcademicVisualizer:
                    transform=ax.transAxes, fontsize=12)
             return
 
-        # Extract numeric parameters for correlation analysis
-        numeric_params = []
-        param_names = []
+        param_rows: List[Dict[str, float]] = []
+        numeric_keys: Set[str] = set()
 
         for result in hp_result.all_results:
-            params = result['parameters']
-            numeric_row = []
-
+            params = result.get('parameters', {})
+            row: Dict[str, float] = {}
             for param_name, param_value in params.items():
                 if isinstance(param_value, (int, float)):
-                    numeric_row.append(param_value)
-                    if param_name not in param_names:
-                        param_names.append(param_name)
+                    row[param_name] = float(param_value)
+                    numeric_keys.add(param_name)
+            if row:
+                param_rows.append(row)
 
-        if len(param_names) > 1:
-            # Convert to DataFrame and calculate correlation
-            param_df = pd.DataFrame(numeric_params, columns=param_names)
-            correlation_matrix = param_df.corr()
+        if not param_rows or len(numeric_keys) < 2:
+            ax.text(0.5, 0.5, 'Insufficient Numeric Parameters', ha='center', va='center',
+                   transform=ax.transAxes, fontsize=12)
+            return
 
-            # Create heatmap
-            im = ax.imshow(correlation_matrix.values, cmap='RdBu_r', vmin=-1, vmax=1, aspect='auto')
+        param_df = pd.DataFrame(param_rows, columns=sorted(numeric_keys))
+        param_df = param_df.apply(pd.to_numeric, errors='coerce')
+        param_df = param_df.dropna(axis=1, how='all')
+        param_df = param_df.loc[:, param_df.apply(lambda col: col.nunique() > 1)]
 
-            # Add correlation values as text
-            for i in range(len(param_names)):
-                for j in range(len(param_names)):
-                    text_color = 'white' if abs(correlation_matrix.iloc[i, j]) > 0.5 else 'black'
-                    ax.text(j, i, f'{correlation_matrix.iloc[i, j]:.2f}',
-                           ha='center', va='center', color=text_color, fontsize=8)
+        if param_df.shape[1] < 2:
+            ax.text(0.5, 0.5, 'Insufficient Variation', ha='center', va='center',
+                   transform=ax.transAxes, fontsize=12)
+            return
 
-            # Set labels
-            ax.set_xticks(range(len(param_names)))
-            ax.set_yticks(range(len(param_names)))
-            ax.set_xticklabels([name.replace('_', ' ') for name in param_names], rotation=45)
-            ax.set_yticklabels([name.replace('_', ' ') for name in param_names])
-            ax.set_title('Parameter Correlation', fontweight='bold')
+        correlation_matrix = param_df.corr().fillna(0.0)
+        param_names = correlation_matrix.columns.tolist()
 
-            # Add colorbar
-            cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-            cbar.set_label('Correlation', rotation=270, labelpad=15)
+        im = ax.imshow(correlation_matrix.values, cmap='RdBu_r', vmin=-1, vmax=1, aspect='auto')
+
+        for i in range(len(param_names)):
+            for j in range(len(param_names)):
+                text_color = 'white' if abs(correlation_matrix.iloc[i, j]) > 0.5 else 'black'
+                ax.text(j, i, f'{correlation_matrix.iloc[i, j]:.2f}',
+                       ha='center', va='center', color=text_color, fontsize=8)
+
+        ax.set_xticks(range(len(param_names)))
+        ax.set_yticks(range(len(param_names)))
+        ax.set_xticklabels([name.replace('_', ' ') for name in param_names], rotation=45)
+        ax.set_yticklabels([name.replace('_', ' ') for name in param_names])
+        ax.set_title('Parameter Correlation', fontweight='bold')
+
+        cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label('Correlation', rotation=270, labelpad=15)
 
     def plot_hyperparameter_heatmap(self, hp_result: HyperparameterSearchResult,
                                    param1: str, param2: str,

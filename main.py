@@ -14,6 +14,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 # Local imports
 from config import cfg
