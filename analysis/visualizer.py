@@ -418,35 +418,16 @@ class AcademicVisualizer:
 
         # 3. Correlation Analysis (radar-style)
         ax3 = fig.add_subplot(gs[1, 2])
-        corr_values = [results[model]['rating_prediction'].get('pearson_correlation', 0) for model in models]
+        corr_values = [models_results[m].get('rating_prediction', {}).get('pearson_correlation', 0) for m in models]
+        fig_corr, ax = plt.subplots(figsize=(9, 5))
+        ax.bar(x, corr_values, color=self.vmamba_colors['success'], edgecolor='white', linewidth=1.0)
+        ax.set_ylim(0, 1)
+        ax.set_ylabel('Correlation')
+        ax.set_title('Correlation Analysis', fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(models, rotation=30, ha='right')
+        figures['model_correlation'] = fig_corr
 
-        # Create performance-based colors
-        colors = []
-        for corr in corr_values:
-            if corr > 0.7:
-                colors.append(self.performance_colors['excellent'])
-            elif corr > 0.6:
-                colors.append(self.performance_colors['good'])
-            elif corr > 0.5:
-                colors.append(self.performance_colors['average'])
-            else:
-                colors.append(self.performance_colors['poor'])
-
-        bars = ax3.bar(models, corr_values, color=colors, alpha=0.8,
-                      edgecolor='white', linewidth=1.5)
-        ax3.set_title('Correlation Analysis', fontweight='bold', pad=15)
-        ax3.set_ylabel('Pearson Correlation', fontweight='bold')
-        ax3.set_xticklabels(models, rotation=45, ha='right')
-        ax3.set_ylim(0, 1)
-
-        for bar, value in zip(bars, corr_values):
-            height = bar.get_height()
-            ax3.text(bar.get_x() + bar.get_width()/2., height + 0.02,
-                    f'{value:.3f}', ha='center', va='bottom',
-                    fontweight='bold', fontsize=10)
-
-        # 4. Timing Analysis
-        ax4 = fig.add_subplot(gs[2, :2])
         train_times = [results[model].get('timing', {}).get('training_time', 0) for model in models]
         eval_times = [results[model].get('timing', {}).get('evaluation_time', 0) for model in models]
 
@@ -759,16 +740,24 @@ class AcademicVisualizer:
         )
 
         # Save as HTML
-        output_path = save_path or self.config.get_plot_path('interactive_dashboard.html')
-        fig.write_html(output_path)
+        if save_path and save_path.endswith('.html'):
+            dashboard_file = save_path
+            os.makedirs(os.path.dirname(dashboard_file) or '.', exist_ok=True)
+        else:
+            target_dir = save_path or self.config.experiment.plots_dir
+            os.makedirs(target_dir, exist_ok=True)
+            dashboard_file = os.path.join(target_dir, 'interactive_dashboard.html')
 
-        logger.info(f"Interactive dashboard saved to: {output_path}")
-        return output_path
+        fig.write_html(dashboard_file)
 
-    def _save_figure(self, fig: plt.Figure, base_path: str, filename: str):
-        """Save figure in multiple formats"""
+        logger.info(f"Interactive dashboard saved to: {dashboard_file}")
+        return dashboard_file
+
+    def _save_figure(self, fig: plt.Figure, base_path: str, filename: str) -> List[str]:
+        """Save figure in multiple formats and return saved paths"""
+        saved_paths: List[str] = []
         if not self.config.visualization.save_plots:
-            return
+            return saved_paths
 
         os.makedirs(base_path, exist_ok=True)
 
@@ -777,8 +766,133 @@ class AcademicVisualizer:
             try:
                 fig.savefig(filepath, format=fmt, dpi=self.config.visualization.dpi)
                 logger.info(f"Plot saved: {filepath}")
+                saved_paths.append(filepath)
             except Exception as e:
                 logger.error(f"Failed to save plot {filepath}: {e}")
+        return saved_paths
+
+
+
+    def _create_dataset_figures(self, stats: Dict) -> Dict[str, plt.Figure]:
+        figures: Dict[str, plt.Figure] = {}
+
+        overview_labels = ['Users', 'Items', 'Ratings']
+        overview_values = [
+            stats.get('n_users', 0),
+            stats.get('n_items', 0),
+            stats.get('n_ratings', 0)
+        ]
+        fig_overview, ax = plt.subplots(figsize=(8, 5))
+        bars = ax.bar(overview_labels, overview_values, color=self.color_palette[:3], edgecolor='white', linewidth=1.2)
+        ax.set_title('Dataset Overview', fontweight='bold')
+        ax.set_ylabel('Count', fontweight='bold')
+        for bar, value in zip(bars, overview_values):
+            ax.text(bar.get_x() + bar.get_width() / 2, value, f"{int(value):,}", ha='center', va='bottom', fontweight='bold')
+        figures['dataset_overview'] = fig_overview
+
+        fig_sparsity, ax = plt.subplots(figsize=(5, 5))
+        sparsity = stats.get('sparsity', 0)
+        density = max(0.0, 1 - sparsity)
+        ax.pie([density, sparsity], labels=['Density', 'Sparsity'], autopct='%1.2f%%', startangle=90,
+               colors=[self.vmamba_colors['success'], self.vmamba_colors['neutral_light']], textprops={'fontweight': 'bold'})
+        ax.set_title('Matrix Sparsity', fontweight='bold')
+        figures['dataset_sparsity'] = fig_sparsity
+
+        rating_distribution = stats.get('rating_distribution', {}) or {}
+        ratings = sorted(rating_distribution.keys())
+        counts = [rating_distribution.get(r, 0) for r in ratings]
+        fig_rating, ax = plt.subplots(figsize=(8, 5))
+        ax.bar(ratings, counts, color=self.vmamba_colors['primary'], edgecolor='white', linewidth=1.0, alpha=0.85)
+        ax.set_title('Rating Distribution', fontweight='bold')
+        ax.set_xlabel('Rating')
+        ax.set_ylabel('Frequency')
+        figures['rating_distribution'] = fig_rating
+
+        user_metrics = {
+            'Mean': stats.get('mean_ratings_per_user', 0),
+            'Std Dev': stats.get('std_ratings_per_user', 0),
+            'Min': stats.get('min_ratings_per_user', 0),
+            'Max': stats.get('max_ratings_per_user', 0)
+        }
+        fig_user, ax = plt.subplots(figsize=(8, 5))
+        ax.bar(user_metrics.keys(), user_metrics.values(), color=self.vmamba_colors['accent'], edgecolor='white', linewidth=1.0)
+        ax.set_title('User Activity Statistics', fontweight='bold')
+        ax.set_ylabel('Ratings Count')
+        figures['user_activity'] = fig_user
+
+        item_metrics = {
+            'Mean': stats.get('mean_ratings_per_item', 0),
+            'Std Dev': stats.get('std_ratings_per_item', 0),
+            'Min': stats.get('min_ratings_per_item', 0),
+            'Max': stats.get('max_ratings_per_item', 0)
+        }
+        fig_item, ax = plt.subplots(figsize=(8, 5))
+        ax.bar(item_metrics.keys(), item_metrics.values(), color=self.vmamba_colors['secondary'], edgecolor='white', linewidth=1.0)
+        ax.set_title('Item Popularity Statistics', fontweight='bold')
+        ax.set_ylabel('Ratings Count')
+        figures['item_activity'] = fig_item
+
+        return figures
+
+    def _create_model_performance_figures(self, models_results: Dict[str, Dict]) -> Dict[str, plt.Figure]:
+        figures: Dict[str, plt.Figure] = {}
+        if not models_results:
+            return figures
+
+        models = list(models_results.keys())
+        x = np.arange(len(models))
+
+        mae_values = [models_results[m].get('rating_prediction', {}).get('mae', 0) for m in models]
+        rmse_values = [models_results[m].get('rating_prediction', {}).get('rmse', 0) for m in models]
+        fig_error, ax = plt.subplots(figsize=(9, 5))
+        width = 0.35
+        ax.bar(x - width / 2, mae_values, width, label='MAE', color=self.vmamba_colors['primary'], edgecolor='white', linewidth=1.0)
+        ax.bar(x + width / 2, rmse_values, width, label='RMSE', color=self.vmamba_colors['accent'], edgecolor='white', linewidth=1.0)
+        ax.set_xticks(x)
+        ax.set_xticklabels(models, rotation=30, ha='right')
+        ax.set_ylabel('Error')
+        ax.set_title('Rating Prediction Errors', fontweight='bold')
+        ax.legend()
+        figures['model_error'] = fig_error
+
+        corr_values = [models_results[m].get('rating_prediction', {}).get('pearson_correlation', 0) for m in models]
+        fig_corr, ax = plt.subplots(figsize=(9, 5))
+        ax.bar(x, corr_values, color=self.vmamba_colors['success'], edgecolor='white', linewidth=1.0)
+        ax.set_ylim(0, 1)
+        ax.set_ylabel('Correlation')
+        ax.set_title('Correlation Analysis', fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(models, rotation=30, ha='right')
+        figures['model_correlation'] = fig_corr
+
+        train_times = [models_results[m].get('timing', {}).get('training_time', 0) for m in models]
+        eval_times = [models_results[m].get('timing', {}).get('evaluation_time', 0) for m in models]
+        fig_time, ax = plt.subplots(figsize=(9, 5))
+        ax.bar(x - width / 2, train_times, width, label='Training', color=self.vmamba_colors['success'], edgecolor='white', linewidth=1.0)
+        ax.bar(x + width / 2, eval_times, width, label='Evaluation', color=self.vmamba_colors['warning'], edgecolor='white', linewidth=1.0)
+        ax.set_xticks(x)
+        ax.set_xticklabels(models, rotation=30, ha='right')
+        ax.set_ylabel('Seconds')
+        ax.set_title('Computation Time', fontweight='bold')
+        ax.legend()
+        figures['model_timing'] = fig_time
+
+        ranking_available = any('ranking' in models_results[m] for m in models)
+        if ranking_available:
+            fig_rank, ax = plt.subplots(figsize=(9, 5))
+            precision = [models_results[m].get('ranking', {}).get(10, {}).get('precision', 0) for m in models]
+            recall = [models_results[m].get('ranking', {}).get(10, {}).get('recall', 0) for m in models]
+            ax.plot(x, precision, marker='o', label='Precision@10', color=self.vmamba_colors['primary'])
+            ax.plot(x, recall, marker='s', label='Recall@10', color=self.vmamba_colors['accent'])
+            ax.set_ylim(0, 1)
+            ax.set_ylabel('Score')
+            ax.set_title('Ranking Metrics (k=10)', fontweight='bold')
+            ax.set_xticks(x)
+            ax.set_xticklabels(models, rotation=30, ha='right')
+            ax.legend()
+            figures['model_ranking'] = fig_rank
+
+        return figures
 
     def generate_all_visualizations(self, loader, models_results: Dict,
                                   save_path: Optional[str] = None) -> Dict[str, str]:
@@ -796,23 +910,26 @@ class AcademicVisualizer:
         logger.log_phase("Generating All Visualizations")
 
         save_path = save_path or self.config.experiment.plots_dir
-        saved_plots = {}
+        saved_plots: Dict[str, str] = {}
 
         try:
-            # Dataset statistics
             if hasattr(loader, 'get_dataset_statistics'):
                 stats = loader.get_dataset_statistics()
-                fig = self.plot_dataset_statistics(stats, save_path)
-                saved_plots['dataset_statistics'] = save_path
-                plt.close(fig)
+                dataset_figures = self._create_dataset_figures(stats)
+                for name, fig in dataset_figures.items():
+                    paths = self._save_figure(fig, save_path, name)
+                    if paths:
+                        saved_plots[name] = paths[0]
+                    plt.close(fig)
 
-            # Model comparison
             if models_results:
-                fig = self.plot_model_comparison(models_results, save_path)
-                saved_plots['model_comparison'] = save_path
-                plt.close(fig)
+                model_figures = self._create_model_performance_figures(models_results)
+                for name, fig in model_figures.items():
+                    paths = self._save_figure(fig, save_path, name)
+                    if paths:
+                        saved_plots[name] = paths[0]
+                    plt.close(fig)
 
-            # Interactive dashboard
             if models_results:
                 dashboard_path = self.create_interactive_dashboard(models_results, save_path)
                 saved_plots['interactive_dashboard'] = dashboard_path
@@ -875,7 +992,7 @@ class AcademicVisualizer:
         plt.tight_layout()
 
         if save_path:
-            self._save_plot(fig, "hyperparameter_analysis", save_path)
+            self._save_figure(fig, save_path, "hyperparameter_analysis")
 
         return fig
 
@@ -917,6 +1034,12 @@ class AcademicVisualizer:
 
         summary_text += f"\nBest Score: {hp_result.best_score:.6f}"
         summary_text += f"\nModel Type: {hp_result.best_model_type.replace('_', ' ').upper()}"
+
+        if getattr(hp_result, 'best_objective_scores', None):
+            summary_text += "\n\nObjective Scores\n"
+            for objective, value in hp_result.best_objective_scores.items():
+                label = objective.replace('_', ' ').title()
+                summary_text += f"{label}: {value:.4f}\n"
 
         # Create styled text box
         bbox_props = dict(boxstyle="round,pad=0.5", facecolor=self.vmamba_colors['neutral_light'],
@@ -1056,7 +1179,19 @@ class AcademicVisualizer:
             summary += f"Statistical Test: {test_info['method'].title()}\n"
             summary += f"P-value: {test_info.get('p_value', 0):.4f}\n"
             significance = "Yes" if test_info.get('significant', False) else "No"
-            summary += f"Significant: {significance}"
+            summary += f"Significant: {significance}\n"
+
+        if getattr(hp_result, 'best_objective_scores', None):
+            summary += "\nObjective Scores\n"
+            for name, value in hp_result.best_objective_scores.items():
+                label = name.replace('_', ' ').title()
+                summary += f"{label}: {value:.4f}\n"
+
+        if cfg.hyperparameter.objective_weights:
+            summary += "\nObjective Weights\n"
+            for name, weight in cfg.hyperparameter.objective_weights.items():
+                label = name.replace('_', ' ').title()
+                summary += f"{label}: {weight:.2f}\n"
 
         # Style the text box
         bbox_props = dict(boxstyle="round,pad=0.5", facecolor=self.vmamba_colors['neutral_light'],
@@ -1166,7 +1301,7 @@ class AcademicVisualizer:
         plt.tight_layout()
 
         if save_path:
-            self._save_plot(fig, f"heatmap_{param1}_{param2}", save_path)
+            self._save_figure(fig, save_path, f"heatmap_{param1}_{param2}")
 
         return fig
 

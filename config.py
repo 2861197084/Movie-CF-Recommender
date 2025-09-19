@@ -4,7 +4,7 @@ Following academic standards and research practices
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Union, Any
 from enum import Enum
 
@@ -72,6 +72,23 @@ class HyperparameterConfig:
     early_stopping_patience: int = 10
     early_stopping_min_delta: float = 0.001
 
+    # Multi-objective configuration
+    secondary_objectives: List[OptimizationObjective] = None
+    objective_weights: Dict[str, float] = None
+    multi_objective_strategy: str = "weighted_sum"  # weighted_sum, pareto
+    objective_directions: Dict[str, bool] = field(default_factory=dict)
+
+    # Search management
+    enable_progress_bar: bool = True
+    progress_update_interval: int = 5
+    intermediate_save_frequency: int = 5
+    prune_worse_than: Optional[float] = None
+    prune_relative: bool = True
+
+    # Parallel execution
+    use_parallel_evaluation: bool = True
+    parallel_backend: str = "thread"
+
     def __post_init__(self):
         if self.user_k_neighbors_range is None:
             self.user_k_neighbors_range = [10, 20, 30, 50, 75, 100]
@@ -96,6 +113,55 @@ class HyperparameterConfig:
 
         if self.prediction_threshold_range is None:
             self.prediction_threshold_range = [2.5, 3.0, 3.5, 4.0]
+
+        if self.secondary_objectives is None:
+            self.secondary_objectives = []
+
+        # Normalize objective weights and directions
+        maximize_objectives = {
+            OptimizationObjective.PEARSON_CORRELATION,
+            OptimizationObjective.PRECISION_AT_K,
+            OptimizationObjective.RECALL_AT_K,
+            OptimizationObjective.NDCG_AT_K,
+            OptimizationObjective.F1_AT_K
+        }
+
+        all_objectives = [self.optimization_objective] + list(self.secondary_objectives)
+        if not all_objectives:
+            all_objectives = [OptimizationObjective.RMSE]
+
+        # Build direction map (True -> maximize, False -> minimize)
+        self.objective_directions = {
+            (obj.value if isinstance(obj, OptimizationObjective) else str(obj)): (obj in maximize_objectives)
+            for obj in all_objectives
+        }
+
+        # Initialize objective weights if not provided
+        if self.objective_weights is None:
+            self.objective_weights = {key: 1.0 for key in self.objective_directions.keys()}
+        else:
+            normalized_weights = {}
+            for key, weight in self.objective_weights.items():
+                normalized_weights[str(key)] = float(weight)
+            for key in self.objective_directions.keys():
+                normalized_weights.setdefault(key, 1.0)
+            self.objective_weights = normalized_weights
+
+        # Primary objective direction controls legacy flag
+        primary_key = self.optimization_objective.value
+        self.maximize_objective = self.objective_directions.get(primary_key, False)
+
+        if self.multi_objective_strategy not in {"weighted_sum", "pareto"}:
+            raise ValueError(f"Unsupported multi-objective strategy: {self.multi_objective_strategy}")
+
+        if self.progress_update_interval < 1:
+            self.progress_update_interval = 1
+
+        if self.intermediate_save_frequency < 1:
+            self.intermediate_save_frequency = 1
+
+        if self.prune_worse_than is not None and self.prune_worse_than < 0:
+            raise ValueError("prune_worse_than must be >= 0")
 
 @dataclass
 class DataConfig:
@@ -154,6 +220,9 @@ class VisualizationConfig:
 class ExperimentConfig:
     """Experiment configuration following academic research standards"""
     experiment_name: str = "movielens_cf_baseline"
+    base_results_dir: str = "./results"
+    base_logs_dir: str = "./logs"
+    base_plots_dir: str = "./plots"
     results_dir: str = "./results"
     logs_dir: str = "./logs"
     plots_dir: str = "./plots"
@@ -166,6 +235,17 @@ class ExperimentConfig:
     include_statistical_tests: bool = True
     significance_level: float = 0.05
 
+    # Runtime metadata
+    current_run_id: Optional[str] = None
+    current_run_timestamp: Optional[str] = None
+    current_run_mode: Optional[str] = None
+    current_run_root: Optional[str] = None
+
+    def reset_to_base_dirs(self):
+        self.results_dir = self.base_results_dir
+        self.logs_dir = self.base_logs_dir
+        self.plots_dir = self.base_plots_dir
+
 class Config:
     """Main configuration class combining all sub-configurations"""
 
@@ -175,6 +255,7 @@ class Config:
         self.evaluation = EvaluationConfig()
         self.visualization = VisualizationConfig()
         self.experiment = ExperimentConfig()
+        self.experiment.reset_to_base_dirs()
         self.hyperparameter = HyperparameterConfig()
 
         # Create necessary directories
@@ -184,9 +265,9 @@ class Config:
         """Create necessary directories for the experiment"""
         directories = [
             self.data.dataset_path,
-            self.experiment.results_dir,
-            self.experiment.logs_dir,
-            self.experiment.plots_dir
+            self.experiment.base_results_dir,
+            self.experiment.base_logs_dir,
+            self.experiment.base_plots_dir
         ]
 
         for directory in directories:

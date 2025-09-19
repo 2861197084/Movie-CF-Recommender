@@ -78,3 +78,32 @@ Movie-CF-Recommender/
     ├── ratings.csv           # MovieLens 评分数据
     └── movies.csv            # MovieLens 电影数据
 ```
+
+## 实验输出说明
+
+每次运行脚本时，系统会依据时间戳、实验模式（baseline/hyperparameter）、数据集与 `--experiment-name` 自动生成独立的实验目录。例如：
+
+```
+results/20250919-205749_baseline_ml-latest-small_movielens-cf-baseline_quick-true/
+plots/20250919-205749_baseline_ml-latest-small_movielens-cf-baseline_quick-true/
+logs/20250919-205749_baseline_ml-latest-small_movielens-cf-baseline_quick-true/
+```
+
+这样可以避免多次实验互相覆盖。每个目录包含：
+
+- `results.json`：完整配置、指标与数据统计
+- `summary.csv`：各模型关键指标汇总
+- `interactive_dashboard.html`：交互式可视化仪表盘
+- `*.png`/`*.pdf`：分离保存的单张图表（数据集概览、模型表现、排名指标等）
+- `academic_report_*.tex/.md`：自动生成的学术报告
+
+## 多目标与超参数搜索
+
+如果需要多目标调参，可在 `config.py` 中调整：
+
+```
+cfg.hyperparameter.secondary_objectives = [OptimizationObjective.PRECISION_AT_K]
+cfg.hyperparameter.objective_weights = {"rmse": 0.7, "precision_at_k": 1.3}
+```
+
+运行时可通过 `--hyperparameter-search` 与 `--search-method` 指定搜索方式。所有输出会归档到对应的 run 目录，便于后续比对与复现。

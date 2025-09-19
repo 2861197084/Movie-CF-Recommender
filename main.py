@@ -8,6 +8,7 @@ import sys
 import argparse
 import json
 import time
+import re
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -24,6 +25,42 @@ from evaluation.metrics import MetricsEvaluator
 from analysis.visualizer import AcademicVisualizer
 from analysis.hyperparameter_optimizer import AcademicHyperparameterOptimizer
 from analysis.academic_reporter import AcademicReporter
+
+def _slugify_token(value: Optional[str]) -> str:
+    if not value:
+        return 'default'
+    token = re.sub(r'[^a-zA-Z0-9]+', '-', value.strip().lower())
+    token = re.sub(r'-+', '-', token).strip('-')
+    return token or 'default'
+
+def prepare_run_environment(mode: str, dataset: str, extras: Optional[Dict[str, str]] = None) -> str:
+    """Create run-specific output directories and update experiment config"""
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    extras = extras or {}
+
+    tokens = [timestamp, mode, dataset, cfg.experiment.experiment_name]
+    for key, value in extras.items():
+        tokens.append(f"{key}-{value}")
+
+    run_id = '_'.join(_slugify_token(token) for token in tokens if token)
+
+    results_dir = os.path.join(cfg.experiment.base_results_dir, run_id)
+    plots_dir = os.path.join(cfg.experiment.base_plots_dir, run_id)
+    logs_dir = os.path.join(cfg.experiment.base_logs_dir, run_id)
+
+    for directory in (results_dir, plots_dir, logs_dir):
+        os.makedirs(directory, exist_ok=True)
+
+    cfg.experiment.current_run_id = run_id
+    cfg.experiment.current_run_timestamp = timestamp
+    cfg.experiment.current_run_mode = mode
+    cfg.experiment.current_run_root = results_dir
+    cfg.experiment.results_dir = results_dir
+    cfg.experiment.plots_dir = plots_dir
+    cfg.experiment.logs_dir = logs_dir
+
+    return run_id
+
 
 def setup_experiment(experiment_name: Optional[str] = None):
     """
@@ -199,7 +236,9 @@ def run_hyperparameter_search(logger, dataset_name: str = "ml-latest-small") -> 
 
         # Save optimization results
         logger.log_phase("Saving Hyperparameter Search Results")
-        results_file = optimizer.save_results(hp_result)
+        results_file = optimizer.save_results(
+            hp_result, os.path.join(cfg.experiment.results_dir, "hyperparameter_results.json")
+        )
 
         # Generate hyperparameter analysis visualizations
         logger.log_phase("Generating Hyperparameter Analysis Visualizations")
@@ -310,6 +349,26 @@ def print_hyperparameter_summary(results: Dict):
     # Best configuration
     print(f"\nBest Configuration:")
     print(f"  Model Type: {hp_result.best_model_type.replace('_', ' ').upper()}")
+    if cfg.hyperparameter.objective_weights:
+        print("\nObjective Weights:")
+        for name, weight in cfg.hyperparameter.objective_weights.items():
+            label = name.replace('_', ' ').title()
+            print(f"  {label}: {weight:.2f}")
+
+    if hp_result.best_objective_scores:
+        print("\nBest Objective Scores:")
+        for name, score in hp_result.best_objective_scores.items():
+            label = name.replace('_', ' ').title()
+            print(f"  {label}: {score:.4f}")
+
+    if hp_result.objective_summary:
+        mean_summary = hp_result.objective_summary.get('mean', {})
+        if mean_summary:
+            print("Objective Score Averages (Across Trials):")
+            for name, score in mean_summary.items():
+                label = name.replace('_', ' ').title()
+                print(f"  {label}: {score:.4f}")
+
     for param, value in hp_result.best_params.items():
         print(f"  {param.replace('_', ' ').title()}: {value}")
 
@@ -346,15 +405,20 @@ def save_results(results: Dict, stats: Dict, results_dir: str, logger):
         results_dir: Directory to save results
         logger: Logger instance
     """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_timestamp = cfg.experiment.current_run_timestamp or datetime.now().strftime("%Y%m%d-%H%M%S")
 
     # Save comprehensive results as JSON
-    results_file = os.path.join(results_dir, f"results_{timestamp}.json")
+    results_file = os.path.join(results_dir, "results.json")
     comprehensive_results = {
         'experiment_config': cfg.to_dict(),
         'dataset_statistics': stats,
         'model_results': results,
-        'timestamp': timestamp
+        'run_metadata': {
+            'run_id': cfg.experiment.current_run_id,
+            'timestamp': run_timestamp,
+            'mode': cfg.experiment.current_run_mode,
+            'experiment_name': cfg.experiment.experiment_name
+        }
     }
 
     try:
@@ -382,7 +446,7 @@ def save_results(results: Dict, stats: Dict, results_dir: str, logger):
 
         if summary_data:
             summary_df = pd.DataFrame(summary_data)
-            summary_file = os.path.join(results_dir, f"summary_{timestamp}.csv")
+            summary_file = os.path.join(results_dir, "summary.csv")
             summary_df.to_csv(summary_file, index=False)
             logger.info(f"Summary saved to: {summary_file}")
 
@@ -491,8 +555,21 @@ def main():
             cfg.hyperparameter.prediction_threshold_range = [3.0]
             cfg.hyperparameter.n_iter_random_search = 20
 
+    if args.experiment_name:
+        cfg.experiment.experiment_name = args.experiment_name
+
+    run_mode = 'hyperparameter' if args.hyperparameter_search else 'baseline'
+    extras: Dict[str, str] = {}
+    if args.hyperparameter_search:
+        extras['search'] = args.search_method
+    if args.quick_test:
+        extras['quick'] = 'true'
+
+    prepare_run_environment(run_mode, args.dataset, extras)
+
     # Setup experiment
-    logger = setup_experiment(args.experiment_name)
+    logger = setup_experiment(None)
+    logger.info(f"Run directory: {cfg.experiment.current_run_root}")
 
     # Print dataset information
     if not args.no_download:

@@ -313,6 +313,27 @@ Our rigorous statistical evaluation demonstrates the significance of the optimiz
                     latex_content += f"\\item Results are {significance} at $\\alpha = {cfg.hyperparameter.significance_level}$ level\n"
 
                 latex_content += "\\end{itemize}\n\n"
+            latex_content += r"\n\subsection{Multi-objective Optimisation}\n\n"
+            latex_content += r"The weighted optimisation considers the following objectives with normalised weights:\n\begin{itemize}\n"
+            for objective_key, weight in cfg.hyperparameter.objective_weights.items():
+                label = objective_key.replace('_', ' ').title()
+                latex_content += f"\\item {label}: {weight:.2f}\n"
+            latex_content += "\\end{itemize}\n\n"
+
+            if hp_result.best_objective_scores:
+                latex_content += "Best-performing configuration achieves: "
+                score_pairs = []
+                for key, value in hp_result.best_objective_scores.items():
+                    score_pairs.append(f"{key.replace('_', ' ').title()} = {value:.4f}")
+                latex_content += ", ".join(score_pairs) + "\n\n"
+
+            latex_content += r"""\subsection{Theoretical Analysis}\n\n"""
+            latex_content += ("The search procedure follows reproducible research practices: "
+                               "k-fold cross-validation ensures statistically robust evaluation, "
+                               "early stopping protects against overfitting the validation folds, "
+                               "and search-space pruning removes dominated configurations to accelerate convergence."
+                               " Weighted aggregation converts heterogeneous objectives (prediction error and ranking quality) "
+                               "into a single optimisation target while preserving their individual interpretability.\n\n")
 
         # Add conclusion
         latex_content += r"""
@@ -438,6 +459,15 @@ This report presents a comprehensive analysis of collaborative filtering algorit
                 for param, value in hp_result.best_params.items():
                     param_display = param.replace('_', ' ').title()
                     md_content += f"| {param_display} | {value} |\n"
+            if cfg.hyperparameter.objective_weights:
+                md_content += "\n**Objective Weights:**\n"
+                for objective_key, weight in cfg.hyperparameter.objective_weights.items():
+                    md_content += f"- {objective_key.replace('_', ' ').title()}: {weight:.2f}\n"
+
+            if hp_result.best_objective_scores:
+                md_content += "\n**Best Objective Scores:**\n"
+                for objective_key, score in hp_result.best_objective_scores.items():
+                    md_content += f"- {objective_key.replace('_', ' ').title()}: {score:.4f}\n"
 
             # Statistical analysis
             if hp_result.statistical_analysis:
