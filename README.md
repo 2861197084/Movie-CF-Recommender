@@ -33,6 +33,9 @@ python main.py --hyperparameter-search --quick-test --cv-folds 3
 
 # 随机搜索超参数优化
 python main.py --hyperparameter-search --search-method random_search --n-trials 100
+
+# 启用 PyTorch 后端并使用 GPU
+python main.py --backend torch --device cuda --hyperparameter-search --search-method random_search --n-trials 20
 ```
 
 ```bash
@@ -54,6 +57,10 @@ python main.py --hyperparameter-search \
 - `ml-latest`：约2700万评分（完整数据集）
 - `ml-25m`：2500万评分（稳定版本）
 - `ml-100k`：10万评分（经典格式）
+
+### 后端选择
+
+默认实现依赖 NumPy/SciPy（`--backend numpy`），适合 CPU 环境。如果已安装 PyTorch 并可使用 GPU，可通过 `--backend torch --device cuda` 切换到实验性的 GPU 后端，减少相似度矩阵计算耗时。当前 PyTorch 后端仅支持余弦相似度，建议在大规模实验前先做小规模验证。
 
 ## 项目结构
 

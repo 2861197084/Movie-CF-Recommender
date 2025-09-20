@@ -188,6 +188,8 @@ class ModelConfig:
     # General parameters
     rating_scale: Tuple[float, float] = (0.5, 5.0)
     prediction_threshold: float = 3.0
+    backend: str = "numpy"           # numpy, torch
+    device: str = "cpu"              # cpu, cuda, cuda:0, etc.
 
 @dataclass
 class EvaluationConfig:

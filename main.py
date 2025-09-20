@@ -22,6 +22,7 @@ from utils.logger import get_logger
 from utils.data_loader import load_movielens_data
 from models.user_based_cf import UserBasedCollaborativeFiltering
 from models.item_based_cf import ItemBasedCollaborativeFiltering
+from models.cf_factory import build_cf_model
 from evaluation.metrics import MetricsEvaluator
 from analysis.visualizer import AcademicVisualizer
 from analysis.hyperparameter_optimizer import AcademicHyperparameterOptimizer
@@ -106,25 +107,39 @@ def run_baseline_experiments(logger, dataset_name: str = "ml-latest-small") -> D
     stats = loader.get_dataset_statistics()
     logger.log_metrics(stats, "Dataset Statistics")
 
-    # Initialize models
-    models = {
-        "UserCF_Cosine": UserBasedCollaborativeFiltering(
-            similarity_metric="cosine",
-            k_neighbors=cfg.model.user_k_neighbors
-        ),
-        "UserCF_Pearson": UserBasedCollaborativeFiltering(
-            similarity_metric="pearson",
-            k_neighbors=cfg.model.user_k_neighbors
-        ),
-        "ItemCF_Cosine": ItemBasedCollaborativeFiltering(
-            similarity_metric="cosine",
-            k_neighbors=cfg.model.item_k_neighbors
-        ),
-        "ItemCF_Pearson": ItemBasedCollaborativeFiltering(
-            similarity_metric="pearson",
-            k_neighbors=cfg.model.item_k_neighbors
-        )
-    }
+    # Initialize models based on selected backend
+    model_specs = [
+        ("UserCF_Cosine", 'user_cf', {
+            'similarity_metric': 'cosine',
+            'k_neighbors': cfg.model.user_k_neighbors
+        }),
+        ("UserCF_Pearson", 'user_cf', {
+            'similarity_metric': 'pearson',
+            'k_neighbors': cfg.model.user_k_neighbors
+        }),
+        ("ItemCF_Cosine", 'item_cf', {
+            'similarity_metric': 'cosine',
+            'k_neighbors': cfg.model.item_k_neighbors
+        }),
+        ("ItemCF_Pearson", 'item_cf', {
+            'similarity_metric': 'pearson',
+            'k_neighbors': cfg.model.item_k_neighbors
+        })
+    ]
+
+    models = {}
+    for name, mtype, params in model_specs:
+        try:
+            model = build_cf_model(
+                mtype,
+                params,
+                backend=cfg.model.backend,
+                device=cfg.model.device
+            )
+        except Exception as exc:
+            logger.warning(f"Skipping {name} due to backend limitation: {exc}")
+            continue
+        models[name] = model
 
     # Train and evaluate models
     results = {}
@@ -279,16 +294,15 @@ def run_hyperparameter_search(logger, dataset_name: str = "ml-latest-small") -> 
         logger.log_phase("Training Best Model on Full Dataset")
         best_params = hp_result.best_params
 
-        if best_params['model_type'] == 'user_cf':
-            best_model = UserBasedCollaborativeFiltering(
-                similarity_metric=best_params['similarity_metric'],
-                k_neighbors=best_params['k_neighbors']
-            )
-        else:
-            best_model = ItemBasedCollaborativeFiltering(
-                similarity_metric=best_params['similarity_metric'],
-                k_neighbors=best_params['k_neighbors']
-            )
+        best_model = build_cf_model(
+            best_params['model_type'],
+            {
+                'similarity_metric': best_params['similarity_metric'],
+                'k_neighbors': best_params['k_neighbors']
+            },
+            backend=cfg.model.backend,
+            device=cfg.model.device
+        )
 
         # Train on full dataset
         best_model.fit(user_item_matrix)
@@ -523,6 +537,11 @@ def main():
                        help='Number of cross-validation folds for hyperparameter search')
     parser.add_argument('--generate-report-only', action='store_true',
                        help='Generate academic report from existing results (skip experiments)')
+    parser.add_argument('--backend', type=str, default=None,
+                        choices=['numpy', 'torch'],
+                        help='Backend used for collaborative filtering models')
+    parser.add_argument('--device', type=str, default=None,
+                        help='Device identifier for torch backend (e.g. cuda, cuda:0, cpu)')
 
     args = parser.parse_args()
 
@@ -558,6 +577,11 @@ def main():
 
     if args.experiment_name:
         cfg.experiment.experiment_name = args.experiment_name
+
+    if args.backend:
+        cfg.model.backend = args.backend
+    if args.device:
+        cfg.model.device = args.device
 
     run_mode = 'hyperparameter' if args.hyperparameter_search else 'baseline'
     extras: Dict[str, str] = {}

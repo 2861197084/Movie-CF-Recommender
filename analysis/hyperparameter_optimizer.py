@@ -24,6 +24,7 @@ from utils.logger import get_logger
 from utils.data_loader import MovieLensLoader
 from models.user_based_cf import UserBasedCollaborativeFiltering
 from models.item_based_cf import ItemBasedCollaborativeFiltering
+from models.cf_factory import build_cf_model
 from evaluation.metrics import MetricsEvaluator, RecommenderMetrics
 
 
@@ -61,6 +62,8 @@ class AcademicHyperparameterOptimizer:
         self.logger = get_logger(logger_name)
         self.evaluator = MetricsEvaluator()
         self.metrics_backend = RecommenderMetrics()
+        self.model_backend = cfg.model.backend
+        self.model_device = cfg.model.device
 
         self.objectives = self._resolve_objectives()
         self.objective_keys = [obj.value for obj in self.objectives]
@@ -90,6 +93,7 @@ class AcademicHyperparameterOptimizer:
         self.intermediate_results_path = os.path.join(
             cfg.experiment.results_dir, "hyperparameter_search_intermediate.json"
         )
+        self._cached_cv_splits: Optional[List[Tuple[pd.DataFrame, pd.DataFrame]]] = None
 
         self.parallel_backend = self.config.parallel_backend.lower()
         if self.parallel_backend not in {"thread", "process"}:
@@ -115,6 +119,7 @@ class AcademicHyperparameterOptimizer:
         )
 
         start_time = time.time()
+        self._cached_cv_splits = None
         if self.config.search_method == SearchMethod.GRID_SEARCH:
             param_combinations = self._generate_grid_search_combinations()
         elif self.config.search_method == SearchMethod.RANDOM_SEARCH:
@@ -284,15 +289,16 @@ class AcademicHyperparameterOptimizer:
                     if self._should_prune(params):
                         continue
                     futures[executor.submit(
-                        self._evaluate_single_combination, idx, params, data_loader, user_item_matrix
+                        self._execute_trial, idx, params, data_loader, user_item_matrix
                     )] = (idx, params)
 
                 for future in as_completed(futures):
                     idx, params = futures[future]
-                    outcome = future.result()
+                    outcome, duration = future.result()
                     if outcome:
                         result = self._finalise_result(idx, params, outcome)
                         results.append(result)
+                        self._log_trial_progress(idx, total, result['mean_score'], duration)
                         continue_search = self._post_evaluation_hooks(result)
                         if not continue_search:
                             break
@@ -300,10 +306,11 @@ class AcademicHyperparameterOptimizer:
             for idx, params in iterator:
                 if self._should_prune(params):
                     continue
-                outcome = self._evaluate_single_combination(idx, params, data_loader, user_item_matrix)
+                outcome, duration = self._execute_trial(idx, params, data_loader, user_item_matrix)
                 if outcome:
                     result = self._finalise_result(idx, params, outcome)
                     results.append(result)
+                    self._log_trial_progress(idx, total, result['mean_score'], duration)
                     continue_search = self._post_evaluation_hooks(result)
                     if not continue_search:
                         break
@@ -339,6 +346,12 @@ class AcademicHyperparameterOptimizer:
         except Exception as exc:
             self.logger.error(f"Error evaluating parameters {params}: {exc}")
             return None
+
+    def _execute_trial(self, idx: int, params: Dict[str, Any],
+                       data_loader: MovieLensLoader, user_item_matrix) -> Tuple[Optional[Dict[str, Any]], float]:
+        start_time = time.time()
+        outcome = self._evaluate_single_combination(idx, params, data_loader, user_item_matrix)
+        return outcome, time.time() - start_time
 
     def _finalise_result(self, idx: int, params: Dict[str, Any], outcome: Dict[str, Any]) -> Dict[str, Any]:
         result = {
@@ -398,42 +411,45 @@ class AcademicHyperparameterOptimizer:
 
         return continue_search
 
+    def _log_trial_progress(self, iteration: int, total: int, score: float, duration: float) -> None:
+        percent = (iteration + 1) / max(total, 1) * 100
+        best_display = self.best_score if np.isfinite(self.best_score) else score
+        self.logger.info(
+            f"Trial {iteration + 1}/{total} ({percent:.1f}%): score={score:.6f}, "
+            f"best={best_display:.6f}, time={duration:.2f}s"
+        )
+
     # ------------------------------------------------------------------
     # Cross validation and scoring
     # ------------------------------------------------------------------
     def _cross_validate_params(self, params: Dict[str, Any], data_loader: MovieLensLoader,
                                user_item_matrix) -> Tuple[List[float], List[Dict[str, float]]]:
-        kf = KFold(
-            n_splits=self.config.cv_folds,
-            shuffle=True,
-            random_state=self.config.cv_random_state
-        )
         ratings_data = data_loader.ratings_df
+        cv_splits = self._get_cv_splits(ratings_data)
         scores: List[float] = []
         objective_scores: List[Dict[str, float]] = []
 
-        for fold, (train_idx, val_idx) in enumerate(kf.split(ratings_data)):
-            train_fold = ratings_data.iloc[train_idx]
-            val_fold = ratings_data.iloc[val_idx]
-
+        for fold, (train_fold, val_fold) in enumerate(cv_splits):
             temp_loader = deepcopy(data_loader)
-            temp_loader.ratings_df = train_fold
+            temp_loader.ratings_df = train_fold.copy()
             temp_loader.filter_sparse_users_items(
                 min_user_ratings=params['min_ratings_per_user'],
                 min_item_ratings=params['min_ratings_per_item']
             )
             fold_matrix = temp_loader.create_user_item_matrix()
 
-            if params['model_type'] == 'user_cf':
-                model = UserBasedCollaborativeFiltering(
-                    similarity_metric=params['similarity_metric'],
-                    k_neighbors=params['k_neighbors']
+            try:
+                model = build_cf_model(
+                    params['model_type'],
+                    {'similarity_metric': params['similarity_metric'], 'k_neighbors': params['k_neighbors']},
+                    backend=self.model_backend,
+                    device=self.model_device
                 )
-            else:
-                model = ItemBasedCollaborativeFiltering(
-                    similarity_metric=params['similarity_metric'],
-                    k_neighbors=params['k_neighbors']
-                )
+            except Exception as exc:
+                self.logger.warning(f"Skipping configuration {params} due to backend limitation: {exc}")
+                scores.append(float('inf'))
+                objective_scores.append({key: float('inf') for key in self.objective_keys})
+                continue
 
             model.fit(fold_matrix)
 
@@ -445,6 +461,27 @@ class AcademicHyperparameterOptimizer:
             objective_scores.append(fold_result['objectives'])
 
         return scores, objective_scores
+
+    def _get_cv_splits(self, ratings_data: pd.DataFrame) -> List[Tuple[pd.DataFrame, pd.DataFrame]]:
+        if self._cached_cv_splits is not None:
+            return self._cached_cv_splits
+
+        splits: List[Tuple[pd.DataFrame, pd.DataFrame]] = []
+        kf = KFold(
+            n_splits=self.config.cv_folds,
+            shuffle=True,
+            random_state=self.config.cv_random_state
+        )
+        for train_idx, val_idx in kf.split(ratings_data):
+            splits.append(
+                (
+                    ratings_data.iloc[train_idx].copy(),
+                    ratings_data.iloc[val_idx].copy()
+                )
+            )
+
+        self._cached_cv_splits = splits
+        return self._cached_cv_splits
 
     def _evaluate_model_fold(self, model, val_data: pd.DataFrame,
                              data_loader: MovieLensLoader) -> Dict[str, Any]:
