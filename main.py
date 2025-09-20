@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 from config import cfg
 from utils.logger import get_logger
 from utils.data_loader import load_movielens_data
+from utils.platform_utils import get_optimal_settings, print_system_info
 from models.user_based_cf import UserBasedCollaborativeFiltering
 from models.item_based_cf import ItemBasedCollaborativeFiltering
 from models.cf_factory import build_cf_model
@@ -538,12 +539,29 @@ def main():
     parser.add_argument('--generate-report-only', action='store_true',
                        help='Generate academic report from existing results (skip experiments)')
     parser.add_argument('--backend', type=str, default=None,
-                        choices=['numpy', 'torch'],
-                        help='Backend used for collaborative filtering models')
+                        choices=['numpy', 'torch', 'auto'],
+                        help='Backend for models (auto detects optimal)')
     parser.add_argument('--device', type=str, default=None,
-                        help='Device identifier for torch backend (e.g. cuda, cuda:0, cpu)')
+                        help='Device (cpu, cuda, mps, auto)')
+    parser.add_argument('--show-system-info', action='store_true',
+                        help='Show system and backend information')
 
     args = parser.parse_args()
+
+    # Show system info if requested
+    if args.show_system_info:
+        print_system_info()
+        sys.exit(0)
+
+    # Auto-detect optimal backend/device if requested
+    if args.backend == 'auto' or args.device == 'auto':
+        optimal_backend, optimal_device = get_optimal_settings()
+        if args.backend == 'auto':
+            args.backend = optimal_backend
+            print(f"Auto-selected backend: {args.backend}")
+        if args.device == 'auto':
+            args.device = optimal_device
+            print(f"Auto-selected device: {args.device}")
 
     # Update configuration if provided
     if args.data_path:
