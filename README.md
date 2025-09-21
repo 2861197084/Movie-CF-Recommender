@@ -34,6 +34,9 @@ python main.py --hyperparameter-search --quick-test --cv-folds 3
 # 随机搜索超参数优化
 python main.py --hyperparameter-search --search-method random_search --n-trials 100
 
+# 贝叶斯优化超参数搜索
+python main.py --hyperparameter-search --search-method bayesian_optimization --n-trials 60
+
 # 启用 PyTorch 后端并使用 GPU
 python main.py --backend torch --device cuda --hyperparameter-search --search-method random_search --n-trials 20
 ```
@@ -236,7 +239,7 @@ logs/20250919-205749_baseline_ml-latest-small_movielens-cf-baseline_quick-true/
 
 这样可以避免多次实验互相覆盖。每个目录包含：
 
-- `results.json`：完整配置、指标与数据统计
+- `results.json` 存放所有配置、指标和统计数据，现在包含 `ranking_summary`（平均倒数排名 MRR）以及可用时的 `diversity_novelty`（覆盖率、推荐新颖度）字段
 - `summary.csv`：各模型关键指标汇总
 - `interactive_dashboard.html`：交互式可视化仪表盘
 - `*.png`/`*.pdf`：分离保存的单张图表（数据集概览、模型表现、排名指标等）

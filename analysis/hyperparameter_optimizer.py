@@ -17,6 +17,8 @@ from typing import Dict, List, Tuple, Optional, Any, Iterable, Callable
 import numpy as np
 import pandas as pd
 from scipy import stats
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
 from sklearn.model_selection import KFold
 
 from config import cfg, SearchMethod, OptimizationObjective, HyperparameterConfig
@@ -102,6 +104,8 @@ class AcademicHyperparameterOptimizer:
             )
             self.parallel_backend = "thread"
 
+        self._prepare_encoding_metadata()
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -120,20 +124,25 @@ class AcademicHyperparameterOptimizer:
 
         start_time = time.time()
         self._cached_cv_splits = None
+
         if self.config.search_method == SearchMethod.GRID_SEARCH:
             param_combinations = self._generate_grid_search_combinations()
+            self.logger.info(f"Total parameter configurations to evaluate: {len(param_combinations)}")
+            results = self._evaluate_parameter_combinations(
+                param_combinations, data_loader, user_item_matrix
+            )
         elif self.config.search_method == SearchMethod.RANDOM_SEARCH:
             param_combinations = self._generate_random_search_combinations()
+            self.logger.info(f"Random search iterations: {len(param_combinations)}")
+            results = self._evaluate_parameter_combinations(
+                param_combinations, data_loader, user_item_matrix
+            )
+        elif self.config.search_method == SearchMethod.BAYESIAN_OPTIMIZATION:
+            results = self._run_bayesian_optimization(data_loader, user_item_matrix)
         else:
             raise NotImplementedError(
                 f"Search method {self.config.search_method} is not implemented."
             )
-
-        self.logger.info(f"Total parameter configurations to evaluate: {len(param_combinations)}")
-
-        results = self._evaluate_parameter_combinations(
-            param_combinations, data_loader, user_item_matrix
-        )
 
         execution_time = time.time() - start_time
         statistical_analysis = None
@@ -224,6 +233,59 @@ class AcademicHyperparameterOptimizer:
                     'prediction_threshold': params[5]
                 })
         return combinations
+
+    def _prepare_encoding_metadata(self) -> None:
+        grid = self._build_parameter_grid()
+
+        self._model_type_encoder = {'user_cf': 0.0, 'item_cf': 1.0}
+        similarity_values = sorted(set(list(grid['user_similarity_metrics']) + list(grid['item_similarity_metrics'])))
+        if not similarity_values:
+            similarity_values = ['cosine']
+        self._similarity_encoder = {metric: float(idx) for idx, metric in enumerate(similarity_values)}
+        similarity_upper = float(max(len(self._similarity_encoder) - 1, 1))
+
+        all_k = sorted(set(list(grid['user_k_neighbors']) + list(grid['item_k_neighbors']))) or [10.0]
+        min_user_counts = sorted(set(grid['min_ratings_per_user'])) or [5]
+        min_item_counts = sorted(set(grid['min_ratings_per_item'])) or [5]
+        train_ratios = sorted(set(grid['train_ratio'])) or [0.8]
+        thresholds = sorted(set(grid['prediction_threshold'])) or [3.0]
+
+        self._normalisation_bounds = {
+            'model_type': (0.0, 1.0),
+            'similarity_metric': (0.0, similarity_upper),
+            'k_neighbors': (float(min(all_k)), float(max(all_k))),
+            'min_ratings_per_user': (float(min(min_user_counts)), float(max(min_user_counts))),
+            'min_ratings_per_item': (float(min(min_item_counts)), float(max(min_item_counts))),
+            'train_ratio': (float(min(train_ratios)), float(max(train_ratios))),
+            'prediction_threshold': (float(min(thresholds)), float(max(thresholds)))
+        }
+
+    def _scale_value(self, key: str, value: float) -> float:
+        lower, upper = self._normalisation_bounds.get(key, (0.0, 1.0))
+        if upper <= lower:
+            return 0.0
+        return float((value - lower) / (upper - lower))
+
+    def _encode_parameters(self, params: Dict[str, Any]) -> np.ndarray:
+        model_val = self._model_type_encoder.get(params['model_type'], 0.0)
+        similarity_key = params['similarity_metric']
+        if similarity_key not in self._similarity_encoder:
+            next_index = float(len(self._similarity_encoder))
+            self._similarity_encoder[similarity_key] = next_index
+            bounds = self._normalisation_bounds.get('similarity_metric', (0.0, next_index))
+            self._normalisation_bounds['similarity_metric'] = (bounds[0], max(bounds[1], next_index))
+        similarity_val = self._similarity_encoder[similarity_key]
+
+        vector = np.array([
+            self._scale_value('model_type', model_val),
+            self._scale_value('k_neighbors', float(params['k_neighbors'])),
+            self._scale_value('similarity_metric', similarity_val),
+            self._scale_value('min_ratings_per_user', float(params['min_ratings_per_user'])),
+            self._scale_value('min_ratings_per_item', float(params['min_ratings_per_item'])),
+            self._scale_value('train_ratio', float(params['train_ratio'])),
+            self._scale_value('prediction_threshold', float(params['prediction_threshold']))
+        ], dtype=float)
+        return vector
 
     def _generate_random_search_combinations(self) -> List[Dict[str, Any]]:
         grid = self._build_parameter_grid()
@@ -322,6 +384,95 @@ class AcademicHyperparameterOptimizer:
                     )
 
         return results
+
+    def _run_bayesian_optimization(self, data_loader: MovieLensLoader, user_item_matrix) -> List[Dict[str, Any]]:
+        candidates = self._generate_grid_search_combinations()
+        if not candidates:
+            self.logger.warning("No candidate configurations generated for Bayesian optimisation. Fallback to empty result set.")
+            return []
+
+        rng = np.random.default_rng(self.config.cv_random_state)
+        rng.shuffle(candidates)
+
+        total_candidates = len(candidates)
+        max_evaluations = self.config.n_iter_random_search if self.config.n_iter_random_search > 0 else total_candidates
+        target_evaluations = min(total_candidates, max(self.config.n_initial_points, max_evaluations))
+
+        evaluated_features: List[np.ndarray] = []
+        evaluated_scores: List[float] = []
+        results: List[Dict[str, Any]] = []
+        iteration = 0
+        continue_search = True
+
+        while candidates and continue_search and len(results) < target_evaluations:
+            if len(evaluated_features) < max(1, self.config.n_initial_points):
+                params = candidates.pop(0)
+            else:
+                selected_idx = self._select_bayesian_candidate(candidates, evaluated_features, evaluated_scores)
+                if selected_idx is None:
+                    params = candidates.pop(0)
+                else:
+                    params = candidates.pop(selected_idx)
+
+            if self._should_prune(params):
+                continue
+
+            outcome, duration = self._execute_trial(iteration, params, data_loader, user_item_matrix)
+            if not outcome:
+                iteration += 1
+                continue
+
+            result = self._finalise_result(iteration, params, outcome)
+            results.append(result)
+
+            continue_search = self._post_evaluation_hooks(result)
+            self._log_trial_progress(iteration, total_candidates, result['mean_score'], duration)
+
+            evaluated_features.append(self._encode_parameters(params))
+            evaluated_scores.append(result['mean_score'])
+            iteration += 1
+
+        return results
+
+    def _select_bayesian_candidate(self, candidates: List[Dict[str, Any]],
+                                   features: List[np.ndarray], scores: List[float]) -> Optional[int]:
+        if len(features) < 1:
+            return None
+
+        X = np.vstack(features) if len(features) > 1 else features[0].reshape(1, -1)
+        y = np.array(scores, dtype=float)
+
+        try:
+            kernel = ConstantKernel(1.0, (1e-3, 1e3)) * Matern(nu=2.5) + WhiteKernel(noise_level=1e-5)
+            gp = GaussianProcessRegressor(kernel=kernel, normalize_y=True, random_state=self.config.cv_random_state)
+            gp.fit(X, y)
+        except Exception as exc:
+            self.logger.warning(f"Bayesian surrogate failed to fit: {exc}. Falling back to random selection.")
+            return None
+
+        best_score = float(np.min(y))
+        xi = 0.01
+        best_ei = float('-inf')
+        best_index: Optional[int] = None
+
+        for idx, params in enumerate(candidates):
+            encoded = self._encode_parameters(params).reshape(1, -1)
+            mu, sigma = gp.predict(encoded, return_std=True)
+            mu = float(mu[0])
+            sigma = float(sigma[0])
+
+            if sigma <= 1e-9:
+                expected_improvement = 0.0
+            else:
+                improvement = best_score - mu - xi
+                z = improvement / sigma
+                expected_improvement = improvement * stats.norm.cdf(z) + sigma * stats.norm.pdf(z)
+
+            if expected_improvement > best_ei:
+                best_ei = expected_improvement
+                best_index = idx
+
+        return best_index
 
     def _evaluate_single_combination(self, idx: int, params: Dict[str, Any],
                                      data_loader: MovieLensLoader, user_item_matrix) -> Optional[Dict[str, Any]]:

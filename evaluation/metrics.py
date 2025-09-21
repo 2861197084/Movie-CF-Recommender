@@ -509,8 +509,11 @@ class MetricsEvaluator:
         return results
 
     def comprehensive_evaluation(self, model, test_data: pd.DataFrame,
-                               user_item_matrix, k_values: List[int] = [5, 10, 20],
-                               threshold: float = 3.5, data_loader=None) -> Dict:
+                               user_item_matrix,
+                               k_values: List[int] = [5, 10, 20],
+                               threshold: float = 3.5,
+                               data_loader=None,
+                               train_data: Optional[pd.DataFrame] = None) -> Dict:
         """
         Perform comprehensive evaluation of a collaborative filtering model
 
@@ -521,6 +524,7 @@ class MetricsEvaluator:
             k_values: List of k values for ranking evaluation
             threshold: Relevance threshold
             data_loader: DataLoader instance with user/item mappings
+            train_data: Optional training dataframe used for popularity statistics
 
         Returns:
             Comprehensive evaluation results
@@ -530,6 +534,7 @@ class MetricsEvaluator:
         results = {
             'rating_prediction': {},
             'ranking': {},
+            'ranking_summary': {},
             'diversity_novelty': {},
             'model_info': model.get_model_summary() if hasattr(model, 'get_model_summary') else {}
         }
@@ -540,7 +545,6 @@ class MetricsEvaluator:
             item_mapping = data_loader.item_mapping
         else:
             logger.warning("No user/item mappings found. Creating mappings from test data...")
-            # Create mappings if not available
             unique_users = sorted(test_data['userId'].unique())
             unique_items = sorted(test_data['movieId'].unique())
             user_mapping = {user_id: idx for idx, user_id in enumerate(unique_users)}
@@ -556,7 +560,6 @@ class MetricsEvaluator:
             original_item_id = row['movieId']
             true_rating = row['rating']
 
-            # Map to matrix indices
             user_idx = user_mapping.get(original_user_id)
             item_idx = item_mapping.get(original_item_id)
 
@@ -577,30 +580,27 @@ class MetricsEvaluator:
                 np.array(y_true), np.array(y_pred)
             )
 
-        # Ranking evaluation (sample of users to avoid computational overhead)
         logger.info("Evaluating ranking performance...")
         unique_users = test_data['userId'].unique()
         sample_users = np.random.choice(unique_users, size=min(100, len(unique_users)), replace=False)
 
-        user_item_predictions = {}
+        user_item_predictions: Dict[int, List[Tuple[int, float, float]]] = {}
         for original_user_id in sample_users:
             user_test_data = test_data[test_data['userId'] == original_user_id]
-            if len(user_test_data) < 5:  # Skip users with too few test ratings
+            if len(user_test_data) < 5:
                 continue
 
             user_idx = user_mapping.get(original_user_id)
             if user_idx is None:
                 continue
 
-            predictions = []
+            predictions: List[Tuple[int, float, float]] = []
             for _, row in user_test_data.iterrows():
                 original_item_id = row['movieId']
                 true_rating = row['rating']
-
                 item_idx = item_mapping.get(original_item_id)
                 if item_idx is None:
                     continue
-
                 try:
                     pred_rating = model.predict(user_idx, item_idx)
                     predictions.append((original_item_id, true_rating, pred_rating))
@@ -610,8 +610,56 @@ class MetricsEvaluator:
             if predictions:
                 user_item_predictions[original_user_id] = predictions
 
+        ranking_user_lists: Dict[int, List[int]] = {}
+        arr_payload: List[np.ndarray] = []
+
         if user_item_predictions:
             results['ranking'] = self.evaluate_ranking(user_item_predictions, k_values, threshold)
+
+            max_k = max(k_values) if k_values else 0
+            for user_id, predictions in user_item_predictions.items():
+                sorted_predictions = sorted(predictions, key=lambda x: x[2], reverse=True)
+                true_ratings_sorted = np.array([p[1] for p in sorted_predictions])
+                arr_payload.append(true_ratings_sorted)
+
+                if max_k > 0:
+                    ranking_user_lists[user_id] = [int(p[0]) for p in sorted_predictions[:max_k]]
+
+            if arr_payload:
+                results['ranking_summary']['mean_reciprocal_rank'] = self.metrics.average_reciprocal_rank(
+                    arr_payload,
+                    threshold=threshold
+                )
+
+        if ranking_user_lists:
+            source_df = None
+            if train_data is not None and not train_data.empty:
+                source_df = train_data
+            elif data_loader is not None and getattr(data_loader, 'ratings_df', None) is not None:
+                source_df = data_loader.ratings_df
+
+            item_popularity: Optional[Dict[int, float]] = None
+            total_items = len(item_mapping) if item_mapping is not None else 0
+
+            if source_df is not None:
+                item_counts = source_df['movieId'].value_counts()
+                total_count = float(item_counts.sum())
+                if total_count > 0:
+                    item_popularity = {int(item): count / total_count for item, count in item_counts.items()}
+                    if total_items == 0:
+                        total_items = len(item_popularity)
+
+            if item_popularity:
+                results['diversity_novelty'] = self.evaluate_diversity_and_novelty(
+                    ranking_user_lists,
+                    item_popularity,
+                    total_items
+                )
+
+        if not results['ranking_summary']:
+            results.pop('ranking_summary')
+        if not results['diversity_novelty']:
+            results.pop('diversity_novelty')
 
         logger.info("Comprehensive evaluation completed")
         return results

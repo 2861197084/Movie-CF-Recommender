@@ -165,7 +165,8 @@ def run_baseline_experiments(logger, dataset_name: str = "ml-latest-small") -> D
                 user_item_matrix=user_item_matrix,
                 k_values=cfg.evaluation.top_k_recommendations,
                 threshold=cfg.model.prediction_threshold,
-                data_loader=loader
+                data_loader=loader,
+                train_data=train_df
             )
             evaluation_time = time.time() - start_time
 
@@ -316,7 +317,8 @@ def run_hyperparameter_search(logger, dataset_name: str = "ml-latest-small") -> 
             user_item_matrix=user_item_matrix,
             k_values=cfg.evaluation.top_k_recommendations,
             threshold=cfg.model.prediction_threshold,
-            data_loader=loader
+            data_loader=loader,
+            train_data=train_df
         )
 
         logger.log_experiment_end()
@@ -530,7 +532,7 @@ def main():
     parser.add_argument('--hyperparameter-search', action='store_true',
                        help='Run hyperparameter optimization instead of baseline experiments')
     parser.add_argument('--search-method', type=str, default='grid_search',
-                       choices=['grid_search', 'random_search'],
+                       choices=['grid_search', 'random_search', 'bayesian_optimization'],
                        help='Hyperparameter search method')
     parser.add_argument('--n-trials', type=int, default=50,
                        help='Number of trials for random search')
@@ -579,7 +581,15 @@ def main():
     # Configure hyperparameter search
     if args.hyperparameter_search:
         from config import SearchMethod
-        cfg.hyperparameter.search_method = SearchMethod.GRID_SEARCH if args.search_method == 'grid_search' else SearchMethod.RANDOM_SEARCH
+        if args.search_method == 'grid_search':
+            cfg.hyperparameter.search_method = SearchMethod.GRID_SEARCH
+        elif args.search_method == 'random_search':
+            cfg.hyperparameter.search_method = SearchMethod.RANDOM_SEARCH
+        elif args.search_method == 'bayesian_optimization':
+            cfg.hyperparameter.search_method = SearchMethod.BAYESIAN_OPTIMIZATION
+        else:
+            raise ValueError(f"Unsupported search method: {args.search_method}")
+
         cfg.hyperparameter.n_iter_random_search = args.n_trials
         cfg.hyperparameter.cv_folds = args.cv_folds
 
@@ -592,6 +602,9 @@ def main():
             cfg.hyperparameter.train_ratio_range = [0.8]
             cfg.hyperparameter.prediction_threshold_range = [3.0]
             cfg.hyperparameter.n_iter_random_search = 20
+            if cfg.hyperparameter.search_method == SearchMethod.BAYESIAN_OPTIMIZATION:
+                cfg.hyperparameter.n_initial_points = min(cfg.hyperparameter.n_initial_points, 5)
+                cfg.hyperparameter.n_iter_random_search = max(cfg.hyperparameter.n_initial_points, cfg.hyperparameter.n_iter_random_search)
 
     if args.experiment_name:
         cfg.experiment.experiment_name = args.experiment_name
@@ -622,7 +635,7 @@ def main():
 
         logger.info("Available MovieLens datasets:")
         for dataset in available_datasets:
-            status = "✓ Selected" if dataset["name"] == args.dataset else "  Available"
+            status = "[Selected]" if dataset["name"] == args.dataset else "  Available"
             logger.info(f"  {status}: {dataset['name']} - {dataset['description']}")
 
     try:
