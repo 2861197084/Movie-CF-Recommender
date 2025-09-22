@@ -26,10 +26,16 @@ class MovieLensLoader:
         self.ratings_df = None
         self.movies_df = None
         self.user_item_matrix = None
+        self.timestamp_matrix = None
         self.user_mapping = None
         self.item_mapping = None
         self.inverse_user_mapping = None
         self.inverse_item_mapping = None
+        self.timestamp_reference = None
+        self.timestamp_unit = 86400.0  # seconds per day
+        self.temporal_statistics = {}
+        self.user_recency_summary = {}
+        self.item_recency_summary = {}
 
     def load_data(self, dataset_name: str = "ml-latest-small",
                   auto_download: bool = True) -> Tuple[pd.DataFrame, pd.DataFrame]:
@@ -181,6 +187,11 @@ class MovieLensLoader:
         self.ratings_df = processed_ratings
 
         # Recreate mappings for the filtered data
+        self.user_item_matrix = None
+        self.timestamp_matrix = None
+        self.temporal_statistics = {}
+        self.user_recency_summary = {}
+        self.item_recency_summary = {}
         self._create_mappings()
 
     def _create_mappings(self):
@@ -199,7 +210,7 @@ class MovieLensLoader:
 
     def create_user_item_matrix(self) -> csr_matrix:
         """
-        Create user-item interaction matrix
+        Create user-item interaction matrix alongside temporal metadata.
 
         Returns:
             Sparse user-item matrix
@@ -219,21 +230,141 @@ class MovieLensLoader:
         # Map to matrix indices
         user_indices = self.ratings_df['userId'].map(self.user_mapping)
         item_indices = self.ratings_df['movieId'].map(self.item_mapping)
-        ratings = self.ratings_df['rating'].values
+        ratings = self.ratings_df['rating'].values.astype(np.float64)
 
-        # Create sparse matrix
+        # Create sparse rating matrix
         n_users = len(unique_users)
         n_items = len(unique_items)
 
         self.user_item_matrix = csr_matrix(
             (ratings, (user_indices, item_indices)),
-            shape=(n_users, n_items)
+            shape=(n_users, n_items),
+            dtype=np.float64
         )
+
+        # Construct timestamp matrix if timestamps are available
+        normalized_timestamps = None
+        if 'timestamp' in self.ratings_df.columns and not self.ratings_df['timestamp'].isnull().all():
+            raw_timestamps = self.ratings_df['timestamp'].astype(np.float64)
+            if len(raw_timestamps) > 0:
+                self.timestamp_reference = float(raw_timestamps.min())
+                self.timestamp_unit = 86400.0  # seconds -> days
+                normalized_timestamps = (raw_timestamps - self.timestamp_reference) / self.timestamp_unit
+
+        if normalized_timestamps is not None:
+            self.timestamp_matrix = csr_matrix(
+                (normalized_timestamps, (user_indices, item_indices)),
+                shape=(n_users, n_items),
+                dtype=np.float64
+            )
+            self._compute_temporal_statistics(self.timestamp_matrix, n_users, n_items)
+        else:
+            self.timestamp_matrix = csr_matrix((n_users, n_items), dtype=np.float64)
+            self.temporal_statistics = {}
+            self.user_recency_summary = {}
+            self.item_recency_summary = {}
+            self.timestamp_reference = None
 
         logger.info(f"Created user-item matrix: {n_users} users × {n_items} items")
         logger.info(f"Matrix density: {self.user_item_matrix.nnz / (n_users * n_items):.6f}")
 
+        if self.temporal_statistics:
+            start_dt = self.temporal_statistics.get('reference_datetime')
+            end_dt = self.temporal_statistics.get('latest_datetime')
+            span_days = self.temporal_statistics.get('global_span_days', 0.0)
+            logger.info(
+                "Temporal coverage: %s → %s (%.2f days)",
+                start_dt if start_dt else 'N/A',
+                end_dt if end_dt else 'N/A',
+                span_days
+            )
+        else:
+            logger.info("No timestamp information available; proceeding without temporal metadata")
+
         return self.user_item_matrix
+
+    def _compute_temporal_statistics(self, timestamp_matrix: csr_matrix,
+                                     n_users: int, n_items: int) -> None:
+        """Compute temporal recency statistics from the timestamp matrix."""
+        if timestamp_matrix is None or timestamp_matrix.nnz == 0:
+            self.temporal_statistics = {}
+            self.user_recency_summary = {}
+            self.item_recency_summary = {}
+            return
+
+        ts_coo = timestamp_matrix.tocoo()
+        data = ts_coo.data.astype(np.float64)
+        rows = ts_coo.row.astype(np.int64)
+        cols = ts_coo.col.astype(np.int64)
+
+        global_min = float(np.min(data)) if data.size else 0.0
+        global_max = float(np.max(data)) if data.size else 0.0
+        global_mean = float(np.mean(data)) if data.size else 0.0
+        global_std = float(np.std(data)) if data.size else 0.0
+
+        user_latest = np.full(n_users, global_min, dtype=np.float64)
+        user_sum = np.zeros(n_users, dtype=np.float64)
+        user_count = np.zeros(n_users, dtype=np.int64)
+
+        item_latest = np.full(n_items, global_min, dtype=np.float64)
+        item_sum = np.zeros(n_items, dtype=np.float64)
+        item_count = np.zeros(n_items, dtype=np.int64)
+
+        for u, i, t in zip(rows, cols, data):
+            user_sum[u] += t
+            user_count[u] += 1
+            if t > user_latest[u]:
+                user_latest[u] = t
+
+            item_sum[i] += t
+            item_count[i] += 1
+            if t > item_latest[i]:
+                item_latest[i] = t
+
+        user_mean = np.full(n_users, global_mean, dtype=np.float64)
+        nonzero_users = user_count > 0
+        user_mean[nonzero_users] = user_sum[nonzero_users] / user_count[nonzero_users]
+
+        item_mean = np.full(n_items, global_mean, dtype=np.float64)
+        nonzero_items = item_count > 0
+        item_mean[nonzero_items] = item_sum[nonzero_items] / item_count[nonzero_items]
+
+        span_days = float(max(0.0, global_max - global_min))
+        reference_dt = None
+        latest_dt = None
+        if self.timestamp_reference is not None:
+            reference_dt = pd.to_datetime(self.timestamp_reference, unit='s')
+            latest_dt = pd.to_datetime(
+                self.timestamp_reference + (global_max * self.timestamp_unit),
+                unit='s'
+            )
+
+        self.temporal_statistics = {
+            'normalized_min': global_min,
+            'normalized_max': global_max,
+            'normalized_mean': global_mean,
+            'normalized_std': global_std,
+            'global_span_days': span_days,
+            'reference_timestamp': self.timestamp_reference,
+            'unit': 'days',
+            'reference_datetime': reference_dt.isoformat() if reference_dt is not None else None,
+            'latest_datetime': latest_dt.isoformat() if latest_dt is not None else None,
+            'global_latest_timestamp': global_max,
+            'global_earliest_timestamp': global_min,
+            'nnz': int(timestamp_matrix.nnz)
+        }
+
+        self.user_recency_summary = {
+            'latest': user_latest,
+            'mean': user_mean,
+            'counts': user_count
+        }
+
+        self.item_recency_summary = {
+            'latest': item_latest,
+            'mean': item_mean,
+            'counts': item_count
+        }
 
     def train_test_split(self, random_state=None) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
@@ -310,6 +441,26 @@ class MovieLensLoader:
 
         return stats
 
+    def normalize_timestamp(self, raw_timestamp: Optional[float]) -> Optional[float]:
+        """Normalize a raw Unix timestamp into the loader's temporal scale."""
+        if raw_timestamp is None:
+            return None
+        if pd.isna(raw_timestamp):
+            return None
+        if self.timestamp_reference is None:
+            return float(raw_timestamp)
+        return (float(raw_timestamp) - self.timestamp_reference) / self.timestamp_unit
+
+    def denormalize_timestamp(self, normalized_timestamp: Optional[float]) -> Optional[float]:
+        """Convert a normalized timestamp back to raw Unix epoch seconds."""
+        if normalized_timestamp is None:
+            return None
+        if pd.isna(normalized_timestamp):
+            return None
+        if self.timestamp_reference is None:
+            return float(normalized_timestamp)
+        return float(self.timestamp_reference + float(normalized_timestamp) * self.timestamp_unit)
+
     def save_processed_data(self, filepath: str):
         """Save processed data for reproducibility"""
         if self.ratings_df is None:
@@ -329,7 +480,7 @@ def load_movielens_data(config=None, dataset_name: str = "ml-latest-small",
         auto_download: Whether to automatically download if not found
 
     Returns:
-        Tuple of (loader, train_df, test_df, user_item_matrix)
+        Tuple of (loader, train_df, test_df, user_item_matrix, timestamp_matrix)
     """
     loader = MovieLensLoader(config)
     loader.load_data(dataset_name, auto_download)
@@ -337,4 +488,4 @@ def load_movielens_data(config=None, dataset_name: str = "ml-latest-small",
     loader.create_user_item_matrix()
     train_df, test_df = loader.train_test_split()
 
-    return loader, train_df, test_df, loader.user_item_matrix
+    return loader, train_df, test_df, loader.user_item_matrix, loader.timestamp_matrix

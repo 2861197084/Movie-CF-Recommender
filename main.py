@@ -98,7 +98,7 @@ def run_baseline_experiments(logger, dataset_name: str = "ml-latest-small") -> D
 
     # Load and preprocess data
     logger.log_phase("Data Loading and Preprocessing")
-    loader, train_df, test_df, user_item_matrix = load_movielens_data(
+    loader, train_df, test_df, user_item_matrix, timestamp_matrix = load_movielens_data(
         config=cfg,
         dataset_name=dataset_name,
         auto_download=True
@@ -125,6 +125,34 @@ def run_baseline_experiments(logger, dataset_name: str = "ml-latest-small") -> D
         ("ItemCF_Pearson", 'item_cf', {
             'similarity_metric': 'pearson',
             'k_neighbors': cfg.model.item_k_neighbors
+        }),
+        ("TemporalUserCF_Cosine", 'temporal_user_cf', {
+            'similarity_metric': 'cosine',
+            'k_neighbors': cfg.model.user_k_neighbors,
+            'half_life': cfg.model.temporal_decay_half_life,
+            'decay_strategy': cfg.model.temporal_decay_strategy,
+            'decay_floor': cfg.model.temporal_decay_floor
+        }),
+        ("TemporalUserCF_Pearson", 'temporal_user_cf', {
+            'similarity_metric': 'pearson',
+            'k_neighbors': cfg.model.user_k_neighbors,
+            'half_life': cfg.model.temporal_decay_half_life,
+            'decay_strategy': cfg.model.temporal_decay_strategy,
+            'decay_floor': cfg.model.temporal_decay_floor
+        }),
+        ("TemporalItemCF_Cosine", 'temporal_item_cf', {
+            'similarity_metric': 'cosine',
+            'k_neighbors': cfg.model.item_k_neighbors,
+            'half_life': cfg.model.temporal_decay_half_life,
+            'decay_strategy': cfg.model.temporal_decay_strategy,
+            'decay_floor': cfg.model.temporal_decay_floor
+        }),
+        ("TemporalItemCF_Pearson", 'temporal_item_cf', {
+            'similarity_metric': 'pearson',
+            'k_neighbors': cfg.model.item_k_neighbors,
+            'half_life': cfg.model.temporal_decay_half_life,
+            'decay_strategy': cfg.model.temporal_decay_strategy,
+            'decay_floor': cfg.model.temporal_decay_floor
         })
     ]
 
@@ -152,7 +180,7 @@ def run_baseline_experiments(logger, dataset_name: str = "ml-latest-small") -> D
         try:
             # Train model
             start_time = time.time()
-            model.fit(user_item_matrix)
+            model.fit(user_item_matrix, timestamp_matrix=timestamp_matrix)
             training_time = time.time() - start_time
 
             logger.info(f"Model {model_name} trained in {training_time:.2f} seconds")
@@ -234,7 +262,7 @@ def run_hyperparameter_search(logger, dataset_name: str = "ml-latest-small") -> 
 
     # Load and preprocess data
     logger.log_phase("Data Loading and Preprocessing")
-    loader, train_df, test_df, user_item_matrix = load_movielens_data(
+    loader, train_df, test_df, user_item_matrix, timestamp_matrix = load_movielens_data(
         config=cfg,
         dataset_name=dataset_name,
         auto_download=True
@@ -250,7 +278,7 @@ def run_hyperparameter_search(logger, dataset_name: str = "ml-latest-small") -> 
     try:
         # Run optimization
         logger.log_phase("Running Hyperparameter Optimization")
-        hp_result = optimizer.optimize(loader, user_item_matrix, test_df)
+        hp_result = optimizer.optimize(loader, user_item_matrix, test_df, timestamp_matrix)
 
         # Save optimization results
         logger.log_phase("Saving Hyperparameter Search Results")
@@ -307,7 +335,7 @@ def run_hyperparameter_search(logger, dataset_name: str = "ml-latest-small") -> 
         )
 
         # Train on full dataset
-        best_model.fit(user_item_matrix)
+        best_model.fit(user_item_matrix, timestamp_matrix=timestamp_matrix)
 
         # Evaluate best model
         evaluator = MetricsEvaluator()

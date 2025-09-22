@@ -894,6 +894,276 @@ class AcademicVisualizer:
 
         return figures
 
+    def _resolve_temporal_pairs(self, models_results: Dict[str, Dict]) -> List[Tuple[str, str]]:
+        pairs: List[Tuple[str, str]] = []
+        for model_name in models_results.keys():
+            if not model_name.lower().startswith('temporal'):
+                continue
+            base_candidate = model_name[len('Temporal'):]
+            if base_candidate.startswith('_'):
+                base_candidate = base_candidate[1:]
+            if base_candidate in models_results:
+                pairs.append((base_candidate, model_name))
+        return pairs
+
+    def _create_temporal_visualizations(self, loader, models_results: Dict[str, Dict]) -> Dict[str, plt.Figure]:
+        figures: Dict[str, plt.Figure] = {}
+        pairs = self._resolve_temporal_pairs(models_results)
+        if not pairs:
+            return figures
+
+        improvement_fig = self._plot_temporal_improvements(pairs, models_results)
+        if improvement_fig is not None:
+            figures['temporal_improvement'] = improvement_fig
+
+        heatmap_fig = self._plot_recency_heatmap(loader)
+        if heatmap_fig is not None:
+            figures['temporal_recency_heatmap'] = heatmap_fig
+
+        timeline_fig = self._plot_temporal_timeline(loader, pairs, models_results)
+        if timeline_fig is not None:
+            figures['temporal_timeline'] = timeline_fig
+
+        return figures
+
+    def _plot_temporal_improvements(self, pairs: List[Tuple[str, str]],
+                                     models_results: Dict[str, Dict]) -> Optional[plt.Figure]:
+        if not pairs:
+            return None
+
+        metric_defs = [('mae', 'MAE'), ('rmse', 'RMSE')]
+        primary_k = cfg.evaluation.top_k_recommendations[0] if cfg.evaluation.top_k_recommendations else 10
+        metric_defs.append((f'precision@{primary_k}', f'Precision@{primary_k}'))
+
+        baseline_values: Dict[str, List[float]] = {key: [] for key, _ in metric_defs}
+        temporal_values: Dict[str, List[float]] = {key: [] for key, _ in metric_defs}
+
+        for base_name, temporal_name in pairs:
+            base_result = models_results.get(base_name, {})
+            temporal_result = models_results.get(temporal_name, {})
+
+            base_ratings = base_result.get('rating_prediction', {})
+            temporal_ratings = temporal_result.get('rating_prediction', {})
+
+            baseline_values['mae'].append(float(base_ratings.get('mae', np.nan)))
+            temporal_values['mae'].append(float(temporal_ratings.get('mae', np.nan)))
+
+            baseline_values['rmse'].append(float(base_ratings.get('rmse', np.nan)))
+            temporal_values['rmse'].append(float(temporal_ratings.get('rmse', np.nan)))
+
+            base_ranking = base_result.get('ranking', {}).get(primary_k, {})
+            temporal_ranking = temporal_result.get('ranking', {}).get(primary_k, {})
+            baseline_values[f'precision@{primary_k}'].append(float(base_ranking.get('precision', np.nan)))
+            temporal_values[f'precision@{primary_k}'].append(float(temporal_ranking.get('precision', np.nan)))
+
+        if not baseline_values['mae']:
+            return None
+
+        fig, axes = plt.subplots(1, len(metric_defs), figsize=(14, 4), constrained_layout=True)
+        if len(metric_defs) == 1:
+            axes = [axes]
+
+        x = np.arange(len(pairs))
+        width = 0.35
+
+        for ax, (metric_key, metric_label) in zip(axes, metric_defs):
+            base_vals = np.array(baseline_values[metric_key])
+            temporal_vals = np.array(temporal_values[metric_key])
+
+            ax.bar(x - width / 2, base_vals, width, label='Baseline',
+                   color=self.vmamba_colors['primary'], edgecolor='white', linewidth=1.0, alpha=0.85)
+            ax.bar(x + width / 2, temporal_vals, width, label='Temporal',
+                   color=self.vmamba_colors['accent'], edgecolor='white', linewidth=1.0, alpha=0.85)
+
+            improvements = base_vals - temporal_vals
+            for idx, delta in enumerate(improvements):
+                if np.isnan(delta):
+                    continue
+                y_pos = max(base_vals[idx], temporal_vals[idx])
+                ax.text(idx, y_pos + 0.01 * (abs(y_pos) + 1), f"Δ {delta:.3f}",
+                        ha='center', va='bottom', fontsize=8, color=self.vmamba_colors['neutral_dark'])
+
+            ax.set_title(metric_label, fontweight='bold')
+            ax.set_xticks(x)
+            ax.set_xticklabels([temporal for _, temporal in pairs], rotation=30, ha='right')
+            ax.grid(alpha=0.3)
+
+        axes[0].set_ylabel('Metric value')
+        axes[0].legend(loc='upper right')
+        fig.suptitle('Temporal CF Improvements over Baselines', fontsize=16, fontweight='bold')
+        return fig
+
+    def _plot_recency_heatmap(self, loader) -> Optional[plt.Figure]:
+        if loader is None:
+            return None
+
+        timestamp_matrix = getattr(loader, 'timestamp_matrix', None)
+        if timestamp_matrix is None or timestamp_matrix.nnz == 0:
+            return None
+
+        user_summary = getattr(loader, 'user_recency_summary', {}) or {}
+        item_summary = getattr(loader, 'item_recency_summary', {}) or {}
+        user_counts = user_summary.get('counts')
+        item_counts = item_summary.get('counts')
+
+        if user_counts is None or item_counts is None:
+            return None
+
+        n_users, n_items = timestamp_matrix.shape
+        sample_users = min(30, n_users)
+        sample_items = min(30, n_items)
+        if sample_users == 0 or sample_items == 0:
+            return None
+
+        top_user_indices = np.argsort(user_counts)[-sample_users:]
+        top_item_indices = np.argsort(item_counts)[-sample_items:]
+
+        submatrix = timestamp_matrix[top_user_indices][:, top_item_indices].toarray()
+        rating_mask_matrix = getattr(loader, 'user_item_matrix', None)
+        if rating_mask_matrix is not None:
+            rating_mask = rating_mask_matrix[top_user_indices][:, top_item_indices].toarray() > 0
+        else:
+            rating_mask = submatrix > 0
+
+        temporal_stats = getattr(loader, 'temporal_statistics', {}) or {}
+        latest_time = temporal_stats.get('global_latest_timestamp')
+        if latest_time is None:
+            latest_time = float(np.max(submatrix)) if submatrix.size else 0.0
+
+        recency = latest_time - submatrix
+        recency[~rating_mask] = np.nan
+
+        if np.all(np.isnan(recency)):
+            return None
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.heatmap(recency, ax=ax, cmap=self.academic_cmap, cbar_kws={'label': 'Days since interaction'},
+                    mask=np.isnan(recency))
+        user_labels = [str(getattr(loader, 'inverse_user_mapping', {}).get(int(idx), idx)) for idx in top_user_indices]
+        item_labels = [str(getattr(loader, 'inverse_item_mapping', {}).get(int(idx), idx)) for idx in top_item_indices]
+        ax.set_xticks(np.arange(len(item_labels)) + 0.5)
+        ax.set_xticklabels(item_labels, rotation=45, ha='right')
+        ax.set_yticks(np.arange(len(user_labels)) + 0.5)
+        ax.set_yticklabels(user_labels)
+        ax.set_title('Recency Landscape of Active Users/Items', fontweight='bold')
+        ax.set_xlabel('Items')
+        ax.set_ylabel('Users')
+        fig.tight_layout()
+        return fig
+
+    def _plot_temporal_timeline(self, loader, pairs: List[Tuple[str, str]],
+                                 models_results: Dict[str, Dict]) -> Optional[plt.Figure]:
+        if not pairs:
+            return None
+
+        base_name, temporal_name = pairs[0]
+        base_details = models_results.get(base_name, {}).get('prediction_details')
+        temporal_details = models_results.get(temporal_name, {}).get('prediction_details')
+
+        if not base_details or not temporal_details:
+            return None
+
+        base_df = pd.DataFrame(base_details)
+        temporal_df = pd.DataFrame(temporal_details)
+        if base_df.empty or temporal_df.empty:
+            return None
+
+        base_df = base_df.rename(columns={'pred_rating': 'pred_rating_base',
+                                          'normalized_timestamp': 'normalized_timestamp_base'})
+        temporal_df = temporal_df.rename(columns={'pred_rating': 'pred_rating_temporal',
+                                                  'normalized_timestamp': 'normalized_timestamp_temporal'})
+
+        merged = pd.merge(
+            base_df,
+            temporal_df[['user_id', 'item_id', 'timestamp', 'pred_rating_temporal', 'normalized_timestamp_temporal']],
+            on=['user_id', 'item_id', 'timestamp'],
+            how='inner'
+        )
+
+        if merged.empty:
+            return None
+
+        merged['normalized_timestamp'] = merged['normalized_timestamp_base'].fillna(
+            merged['normalized_timestamp_temporal']
+        )
+        merged['abs_error_base'] = np.abs(merged['true_rating'] - merged['pred_rating_base'])
+        merged['abs_error_temporal'] = np.abs(merged['true_rating'] - merged['pred_rating_temporal'])
+
+        timeline_values = merged['normalized_timestamp'].dropna()
+        if timeline_values.empty:
+            return None
+
+        quantiles = np.linspace(0, 1, 6)
+        bin_edges = np.unique(np.quantile(timeline_values, quantiles))
+        if bin_edges.size < 2:
+            min_val, max_val = timeline_values.min(), timeline_values.max()
+            if np.isclose(min_val, max_val):
+                return None
+            bin_edges = np.linspace(min_val, max_val, 6)
+
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+        dataset_counts: List[int] = []
+        if loader is not None and getattr(loader, 'ratings_df', None) is not None and loader.timestamp_reference is not None:
+            ratings_df = loader.ratings_df.copy()
+            if 'timestamp' in ratings_df.columns:
+                ratings_df['normalized_timestamp'] = (
+                    (ratings_df['timestamp'].astype(float) - loader.timestamp_reference) / loader.timestamp_unit
+                )
+                for start, end in zip(bin_edges[:-1], bin_edges[1:]):
+                    mask = (ratings_df['normalized_timestamp'] >= start) & (ratings_df['normalized_timestamp'] < end)
+                    dataset_counts.append(int(mask.sum()))
+            else:
+                dataset_counts = [0] * len(bin_centers)
+        else:
+            dataset_counts = [0] * len(bin_centers)
+
+        base_mae_bins: List[float] = []
+        temporal_mae_bins: List[float] = []
+        improvement_bins: List[float] = []
+
+        for start, end in zip(bin_edges[:-1], bin_edges[1:]):
+            mask = (merged['normalized_timestamp'] >= start) & (merged['normalized_timestamp'] < end)
+            if mask.sum() == 0:
+                base_mae_bins.append(np.nan)
+                temporal_mae_bins.append(np.nan)
+                improvement_bins.append(np.nan)
+            else:
+                base_mae = float(merged.loc[mask, 'abs_error_base'].mean())
+                temporal_mae = float(merged.loc[mask, 'abs_error_temporal'].mean())
+                base_mae_bins.append(base_mae)
+                temporal_mae_bins.append(temporal_mae)
+                improvement_bins.append(base_mae - temporal_mae)
+
+        fig, ax1 = plt.subplots(figsize=(12, 6))
+        x = np.arange(len(bin_centers))
+
+        ax1.bar(x, dataset_counts, color=self.vmamba_colors['neutral_light'],
+                edgecolor=self.vmamba_colors['neutral_dark'], alpha=0.7)
+        ax1.set_ylabel('Ratings count')
+        ax1.set_xlabel('Temporal bins')
+        ax1.set_title('Temporal Rating Density vs Performance', fontweight='bold')
+
+        ax2 = ax1.twinx()
+        ax2.plot(x, base_mae_bins, marker='o', label='Baseline MAE', color=self.vmamba_colors['primary'])
+        ax2.plot(x, temporal_mae_bins, marker='s', label='Temporal MAE', color=self.vmamba_colors['accent'])
+        ax2.plot(x, improvement_bins, marker='^', linestyle='--', label='MAE Δ', color=self.vmamba_colors['success'])
+        ax2.set_ylabel('Error / Improvement')
+
+        if loader is not None and getattr(loader, 'timestamp_reference', None) is not None:
+            midpoint_seconds = loader.timestamp_reference + np.array(bin_centers) * loader.timestamp_unit
+            labels = pd.to_datetime(midpoint_seconds, unit='s').strftime('%Y-%m')
+        else:
+            labels = [f"{center:.1f}" for center in bin_centers]
+
+        ax1.set_xticks(x)
+        ax1.set_xticklabels(labels, rotation=45, ha='right')
+        ax1.grid(alpha=0.3)
+        ax2.grid(alpha=0.1)
+        ax2.legend(loc='upper right')
+        fig.tight_layout()
+        return fig
+
     def generate_all_visualizations(self, loader, models_results: Dict,
                                   save_path: Optional[str] = None) -> Dict[str, str]:
         """
@@ -925,6 +1195,13 @@ class AcademicVisualizer:
             if models_results:
                 model_figures = self._create_model_performance_figures(models_results)
                 for name, fig in model_figures.items():
+                    paths = self._save_figure(fig, save_path, name)
+                    if paths:
+                        saved_plots[name] = paths[0]
+                    plt.close(fig)
+
+                temporal_figures = self._create_temporal_visualizations(loader, models_results)
+                for name, fig in temporal_figures.items():
                     paths = self._save_figure(fig, save_path, name)
                     if paths:
                         saved_plots[name] = paths[0]

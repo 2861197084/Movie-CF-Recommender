@@ -46,12 +46,14 @@ class ItemBasedCollaborativeFiltering(BaseCollaborativeFiltering):
         self.item_means = None
         self.global_mean = None
 
-    def fit(self, user_item_matrix: csr_matrix) -> 'ItemBasedCollaborativeFiltering':
+    def fit(self, user_item_matrix: csr_matrix,
+            timestamp_matrix: Optional[csr_matrix] = None) -> 'ItemBasedCollaborativeFiltering':
         """
         Fit the item-based CF model
 
         Args:
             user_item_matrix: Sparse user-item interaction matrix (users × items)
+            timestamp_matrix: Optional timestamp matrix aligned with ratings
 
         Returns:
             Fitted model instance
@@ -59,6 +61,7 @@ class ItemBasedCollaborativeFiltering(BaseCollaborativeFiltering):
         logger.log_phase("Fitting Item-based CF Model")
 
         self.user_item_matrix = user_item_matrix
+        self.timestamp_matrix = timestamp_matrix
         n_users, n_items = user_item_matrix.shape
 
         logger.info(f"Training on {n_users} users and {n_items} items")
@@ -102,7 +105,8 @@ class ItemBasedCollaborativeFiltering(BaseCollaborativeFiltering):
         logger.info(f"Computed statistics for {len(self.item_means)} items")
         logger.info(f"Global mean rating: {self.global_mean:.3f}")
 
-    def predict(self, user_id: int, item_id: int) -> float:
+    def predict(self, user_id: int, item_id: int,
+                timestamp: Optional[float] = None) -> float:
         """
         Predict rating for a user-item pair using item-based CF
 

@@ -191,6 +191,11 @@ class ModelConfig:
     backend: str = "numpy"           # numpy, torch
     device: str = "cpu"              # cpu, cuda, cuda:0, etc.
 
+    # Temporal enhancement parameters
+    temporal_decay_half_life: float = 30.0  # days
+    temporal_decay_strategy: str = "exponential"
+    temporal_decay_floor: float = 0.05
+
 @dataclass
 class EvaluationConfig:
     """Evaluation configuration parameters"""
