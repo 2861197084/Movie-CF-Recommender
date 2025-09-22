@@ -246,7 +246,7 @@ class TorchCFBase:
 class TorchUserBasedCF(TorchCFBase):
     """User-based CF accelerated by PyTorch (CPU/GPU)."""
 
-    def fit(self, user_item_matrix) -> "TorchUserBasedCF":
+    def fit(self, user_item_matrix, timestamp_matrix: Optional[Any] = None) -> "TorchUserBasedCF":
         self.user_item_matrix = user_item_matrix
         ratings = _to_tensor(user_item_matrix, self.device_obj)
         self.rating_matrix = ratings
@@ -306,7 +306,7 @@ class TorchUserBasedCF(TorchCFBase):
         )
         return self
 
-    def predict(self, user_idx: int, item_idx: int) -> float:
+    def predict(self, user_idx: int, item_idx: int, timestamp: Optional[float] = None) -> float:
         self._ensure_fitted()
         value = self.prediction_cache[user_idx, item_idx]
         return float(value.item())
@@ -350,7 +350,7 @@ class TorchUserBasedCF(TorchCFBase):
 class TorchItemBasedCF(TorchCFBase):
     """Item-based CF accelerated by PyTorch (CPU/GPU)."""
 
-    def fit(self, user_item_matrix) -> "TorchItemBasedCF":
+    def fit(self, user_item_matrix, timestamp_matrix: Optional[Any] = None) -> "TorchItemBasedCF":
         self.user_item_matrix = user_item_matrix
         ratings = _to_tensor(user_item_matrix, self.device_obj)
         self.rating_matrix = ratings
@@ -414,7 +414,7 @@ class TorchItemBasedCF(TorchCFBase):
         )
         return self
 
-    def predict(self, user_idx: int, item_idx: int) -> float:
+    def predict(self, user_idx: int, item_idx: int, timestamp: Optional[float] = None) -> float:
         self._ensure_fitted()
         value = self.prediction_cache[user_idx, item_idx]
         return float(value.item())

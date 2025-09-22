@@ -552,8 +552,15 @@ class MetricsEvaluator:
 
         # Rating prediction evaluation
         logger.info("Computing rating predictions...")
-        y_true = []
-        y_pred = []
+        y_true: List[float] = []
+        y_pred: List[float] = []
+        prediction_cache: Dict[Tuple[int, int], Tuple[float, Optional[float], Optional[float]]] = {}
+        detailed_records: List[Dict[str, Optional[float]]] = []
+        max_detailed_records = 5000
+
+        normalize_timestamp = None
+        if data_loader is not None and hasattr(data_loader, 'normalize_timestamp'):
+            normalize_timestamp = data_loader.normalize_timestamp  # type: ignore[attr-defined]
 
         for _, row in test_data.iterrows():
             original_user_id = row['userId']
@@ -568,9 +575,30 @@ class MetricsEvaluator:
                 continue
 
             try:
-                pred_rating = model.predict(user_idx, item_idx)
-                y_true.append(true_rating)
-                y_pred.append(pred_rating)
+                raw_timestamp = row['timestamp'] if 'timestamp' in row else None
+                if pd.isna(raw_timestamp):
+                    raw_timestamp = None
+                normalized_timestamp = None
+                if normalize_timestamp is not None:
+                    normalized_timestamp = normalize_timestamp(raw_timestamp)
+
+                pred_rating = model.predict(user_idx, item_idx, timestamp=normalized_timestamp)
+                y_true.append(float(true_rating))
+                y_pred.append(float(pred_rating))
+                prediction_cache[(user_idx, item_idx)] = (
+                    float(pred_rating),
+                    float(normalized_timestamp) if normalized_timestamp is not None else None,
+                    float(raw_timestamp) if raw_timestamp is not None else None
+                )
+                if len(detailed_records) < max_detailed_records:
+                    detailed_records.append({
+                        'user_id': float(original_user_id),
+                        'item_id': float(original_item_id),
+                        'true_rating': float(true_rating),
+                        'pred_rating': float(pred_rating),
+                        'timestamp': float(raw_timestamp) if raw_timestamp is not None else None,
+                        'normalized_timestamp': float(normalized_timestamp) if normalized_timestamp is not None else None
+                    })
             except Exception as e:
                 logger.warning(f"Prediction failed for user {original_user_id} (idx {user_idx}), item {original_item_id} (idx {item_idx}): {e}")
                 continue
@@ -602,8 +630,23 @@ class MetricsEvaluator:
                 if item_idx is None:
                     continue
                 try:
-                    pred_rating = model.predict(user_idx, item_idx)
-                    predictions.append((original_item_id, true_rating, pred_rating))
+                    cached = prediction_cache.get((user_idx, item_idx))
+                    if cached is not None:
+                        pred_rating = cached[0]
+                    else:
+                        raw_timestamp = row['timestamp'] if 'timestamp' in row else None
+                        if pd.isna(raw_timestamp):
+                            raw_timestamp = None
+                        normalized_timestamp = None
+                        if normalize_timestamp is not None:
+                            normalized_timestamp = normalize_timestamp(raw_timestamp)
+                        pred_rating = model.predict(user_idx, item_idx, timestamp=normalized_timestamp)
+                        prediction_cache[(user_idx, item_idx)] = (
+                            float(pred_rating),
+                            float(normalized_timestamp) if normalized_timestamp is not None else None,
+                            float(raw_timestamp) if raw_timestamp is not None else None
+                        )
+                    predictions.append((original_item_id, float(true_rating), float(pred_rating)))
                 except Exception:
                     continue
 
@@ -655,6 +698,9 @@ class MetricsEvaluator:
                     item_popularity,
                     total_items
                 )
+
+        if detailed_records:
+            results['prediction_details'] = detailed_records
 
         if not results['ranking_summary']:
             results.pop('ranking_summary')

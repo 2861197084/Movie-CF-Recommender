@@ -33,6 +33,7 @@ class BaseCollaborativeFiltering(ABC):
         self.k_neighbors = k_neighbors
         self.similarity_matrix = None
         self.user_item_matrix = None
+        self.timestamp_matrix = None
         self.is_fitted = False
 
         # Validate similarity metric
@@ -41,12 +42,14 @@ class BaseCollaborativeFiltering(ABC):
             raise ValueError(f"Similarity metric must be one of {valid_metrics}")
 
     @abstractmethod
-    def fit(self, user_item_matrix: csr_matrix) -> 'BaseCollaborativeFiltering':
+    def fit(self, user_item_matrix: csr_matrix,
+            timestamp_matrix: Optional[csr_matrix] = None) -> 'BaseCollaborativeFiltering':
         """
         Fit the collaborative filtering model
 
         Args:
             user_item_matrix: Sparse user-item interaction matrix
+            timestamp_matrix: Optional sparse matrix with aligned timestamps
 
         Returns:
             Fitted model instance
@@ -54,13 +57,15 @@ class BaseCollaborativeFiltering(ABC):
         pass
 
     @abstractmethod
-    def predict(self, user_id: int, item_id: int) -> float:
+    def predict(self, user_id: int, item_id: int,
+                timestamp: Optional[float] = None) -> float:
         """
         Predict rating for a user-item pair
 
         Args:
             user_id: User index
             item_id: Item index
+            timestamp: Optional normalized timestamp for the target interaction
 
         Returns:
             Predicted rating

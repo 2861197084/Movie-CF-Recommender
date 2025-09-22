@@ -110,7 +110,7 @@ class AcademicHyperparameterOptimizer:
     # Public API
     # ------------------------------------------------------------------
     def optimize(self, data_loader: MovieLensLoader, user_item_matrix,
-                 test_data: pd.DataFrame) -> HyperparameterSearchResult:
+                 test_data: pd.DataFrame, timestamp_matrix=None) -> HyperparameterSearchResult:
         """Run the configured hyperparameter optimisation routine"""
         self.logger.info(
             f"Starting hyperparameter optimisation with {self.config.search_method.value}"
@@ -129,16 +129,16 @@ class AcademicHyperparameterOptimizer:
             param_combinations = self._generate_grid_search_combinations()
             self.logger.info(f"Total parameter configurations to evaluate: {len(param_combinations)}")
             results = self._evaluate_parameter_combinations(
-                param_combinations, data_loader, user_item_matrix
+                param_combinations, data_loader, user_item_matrix, timestamp_matrix
             )
         elif self.config.search_method == SearchMethod.RANDOM_SEARCH:
             param_combinations = self._generate_random_search_combinations()
             self.logger.info(f"Random search iterations: {len(param_combinations)}")
             results = self._evaluate_parameter_combinations(
-                param_combinations, data_loader, user_item_matrix
+                param_combinations, data_loader, user_item_matrix, timestamp_matrix
             )
         elif self.config.search_method == SearchMethod.BAYESIAN_OPTIMIZATION:
-            results = self._run_bayesian_optimization(data_loader, user_item_matrix)
+            results = self._run_bayesian_optimization(data_loader, user_item_matrix, timestamp_matrix)
         else:
             raise NotImplementedError(
                 f"Search method {self.config.search_method} is not implemented."
@@ -329,7 +329,8 @@ class AcademicHyperparameterOptimizer:
     # Evaluation core
     # ------------------------------------------------------------------
     def _evaluate_parameter_combinations(self, combinations: List[Dict[str, Any]],
-                                        data_loader: MovieLensLoader, user_item_matrix) -> List[Dict[str, Any]]:
+                                        data_loader: MovieLensLoader, user_item_matrix,
+                                        timestamp_matrix=None) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
         total = len(combinations)
         iterator = self._progress_wrapper(enumerate(combinations), total)
@@ -351,7 +352,7 @@ class AcademicHyperparameterOptimizer:
                     if self._should_prune(params):
                         continue
                     futures[executor.submit(
-                        self._execute_trial, idx, params, data_loader, user_item_matrix
+                        self._execute_trial, idx, params, data_loader, user_item_matrix, timestamp_matrix
                     )] = (idx, params)
 
                 for future in as_completed(futures):
@@ -368,7 +369,7 @@ class AcademicHyperparameterOptimizer:
             for idx, params in iterator:
                 if self._should_prune(params):
                     continue
-                outcome, duration = self._execute_trial(idx, params, data_loader, user_item_matrix)
+                outcome, duration = self._execute_trial(idx, params, data_loader, user_item_matrix, timestamp_matrix)
                 if outcome:
                     result = self._finalise_result(idx, params, outcome)
                     results.append(result)
@@ -385,7 +386,8 @@ class AcademicHyperparameterOptimizer:
 
         return results
 
-    def _run_bayesian_optimization(self, data_loader: MovieLensLoader, user_item_matrix) -> List[Dict[str, Any]]:
+    def _run_bayesian_optimization(self, data_loader: MovieLensLoader, user_item_matrix,
+                                   timestamp_matrix=None) -> List[Dict[str, Any]]:
         candidates = self._generate_grid_search_combinations()
         if not candidates:
             self.logger.warning("No candidate configurations generated for Bayesian optimisation. Fallback to empty result set.")
@@ -417,7 +419,7 @@ class AcademicHyperparameterOptimizer:
             if self._should_prune(params):
                 continue
 
-            outcome, duration = self._execute_trial(iteration, params, data_loader, user_item_matrix)
+            outcome, duration = self._execute_trial(iteration, params, data_loader, user_item_matrix, timestamp_matrix)
             if not outcome:
                 iteration += 1
                 continue
@@ -475,9 +477,12 @@ class AcademicHyperparameterOptimizer:
         return best_index
 
     def _evaluate_single_combination(self, idx: int, params: Dict[str, Any],
-                                     data_loader: MovieLensLoader, user_item_matrix) -> Optional[Dict[str, Any]]:
+                                     data_loader: MovieLensLoader, user_item_matrix,
+                                     timestamp_matrix=None) -> Optional[Dict[str, Any]]:
         try:
-            scores, per_objective = self._cross_validate_params(params, data_loader, user_item_matrix)
+            scores, per_objective = self._cross_validate_params(
+                params, data_loader, user_item_matrix, timestamp_matrix
+            )
             if not scores:
                 return None
 
@@ -499,9 +504,12 @@ class AcademicHyperparameterOptimizer:
             return None
 
     def _execute_trial(self, idx: int, params: Dict[str, Any],
-                       data_loader: MovieLensLoader, user_item_matrix) -> Tuple[Optional[Dict[str, Any]], float]:
+                       data_loader: MovieLensLoader, user_item_matrix,
+                       timestamp_matrix=None) -> Tuple[Optional[Dict[str, Any]], float]:
         start_time = time.time()
-        outcome = self._evaluate_single_combination(idx, params, data_loader, user_item_matrix)
+        outcome = self._evaluate_single_combination(
+            idx, params, data_loader, user_item_matrix, timestamp_matrix
+        )
         return outcome, time.time() - start_time
 
     def _finalise_result(self, idx: int, params: Dict[str, Any], outcome: Dict[str, Any]) -> Dict[str, Any]:
@@ -574,7 +582,7 @@ class AcademicHyperparameterOptimizer:
     # Cross validation and scoring
     # ------------------------------------------------------------------
     def _cross_validate_params(self, params: Dict[str, Any], data_loader: MovieLensLoader,
-                               user_item_matrix) -> Tuple[List[float], List[Dict[str, float]]]:
+                               user_item_matrix, timestamp_matrix=None) -> Tuple[List[float], List[Dict[str, float]]]:
         ratings_data = data_loader.ratings_df
         cv_splits = self._get_cv_splits(ratings_data)
         scores: List[float] = []
@@ -588,6 +596,7 @@ class AcademicHyperparameterOptimizer:
                 min_item_ratings=params['min_ratings_per_item']
             )
             fold_matrix = temp_loader.create_user_item_matrix()
+            fold_timestamps = temp_loader.timestamp_matrix
 
             try:
                 model = build_cf_model(
@@ -602,7 +611,7 @@ class AcademicHyperparameterOptimizer:
                 objective_scores.append({key: float('inf') for key in self.objective_keys})
                 continue
 
-            model.fit(fold_matrix)
+            model.fit(fold_matrix, timestamp_matrix=fold_timestamps)
 
             fold_result = self._evaluate_model_fold(
                 model, val_fold, temp_loader
@@ -644,13 +653,17 @@ class AcademicHyperparameterOptimizer:
             user_id = getattr(row, 'userId')
             item_id = getattr(row, 'movieId')
             true_rating = getattr(row, 'rating')
+            raw_timestamp = getattr(row, 'timestamp', None)
+            normalized_timestamp = None
+            if hasattr(data_loader, 'normalize_timestamp'):
+                normalized_timestamp = data_loader.normalize_timestamp(raw_timestamp)
 
             user_idx = data_loader.user_mapping.get(user_id) if data_loader.user_mapping else None
             item_idx = data_loader.item_mapping.get(item_id) if data_loader.item_mapping else None
             if user_idx is None or item_idx is None:
                 continue
 
-            pred_rating = model.predict(user_idx, item_idx)
+            pred_rating = model.predict(user_idx, item_idx, timestamp=normalized_timestamp)
             if np.isnan(pred_rating):
                 continue
 
