@@ -52,6 +52,65 @@ python main.py --hyperparameter-search \
                --cv-folds 5
 ```
 
+### 数据划分策略（--split-strategy）
+
+系统支持三种学术常用的数据划分方式：
+
+- random：全局随机划分（默认）。
+- temporal_user：按用户时间序列保留最近 test_ratio 比例为测试集（每个用户均保持因果性）。
+- temporal_global：按全局时间点分割，阈值取 rating 时间的 train_ratio 分位（训练集在阈值之前，测试集在之后）。
+
+示例：
+
+```bash
+# 每用户时间划分（更贴近线上推荐的因果评估）
+python main.py --quick-test --split-strategy temporal_user
+
+# 全局时间点划分（更严格的时序外推场景）
+python main.py --quick-test --split-strategy temporal_global
+```
+
+提示：时间划分下，训练仅使用 train 子集构建矩阵与映射（避免数据泄漏）；测试集中未在训练出现的用户/物品会被跳过并在日志中汇总统计。
+
+### 时间感知 CF 与相似度正则化参数
+
+在 `config.py` 的 `cfg.model` 下可用的关键参数：
+
+- temporal_decay_half_life：时间衰减半衰期（天），建议尝试 [14, 30, 60, 90]
+- temporal_decay_floor：时间权重下界，建议尝试 [0.0, 0.05, 0.1]
+- temporal_decay_on_similarity：是否在构建相似度前做全局时间加权（True/False）
+- similarity_shrinkage_lambda：显著性收缩 λ（10~50 常见），抑制低共评样本带来的噪声
+- truncate_negative_similarity：是否截断负相似度（True/False），与 Pearson 常搭配
+
+常见组合建议：
+
+- ItemCF：cosine + k∈[50,120]，适度 shrinkage（≈25）
+- UserCF：cosine/pearson + k∈[30,100]
+- Temporal：half_life 与 decay_on_similarity 两套路径都建议分别试验
+
+### 更多命令示例
+
+```bash
+# 全局时间划分 + 随机搜索（含 temporal 与非 temporal 模型）
+python main.py \
+  --backend numpy \
+  --split-strategy temporal_global \
+  --hyperparameter-search \
+  --search-method random_search \
+  --n-trials 40 \
+  --cv-folds 3 \
+  --experiment-name temporal-global-search
+
+# 贝叶斯优化 + 每用户时间划分
+python main.py \
+  --backend numpy \
+  --split-strategy temporal_user \
+  --hyperparameter-search \
+  --search-method bayesian_optimization \
+  --n-trials 30 \
+  --cv-folds 3
+```
+
 ### 支持的数据集
 
 系统可自动下载和处理多种 MovieLens 数据集：
