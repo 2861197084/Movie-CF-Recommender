@@ -223,7 +223,7 @@ class AcademicHyperparameterOptimizer:
                 grid['train_ratio'],
                 grid['prediction_threshold']
             ):
-                combinations.append({
+                base = {
                     'model_type': model_type,
                     'k_neighbors': params[0],
                     'similarity_metric': params[1],
@@ -231,7 +231,30 @@ class AcademicHyperparameterOptimizer:
                     'min_ratings_per_item': params[3],
                     'train_ratio': params[4],
                     'prediction_threshold': params[5]
-                })
+                }
+                # Expand with regularisation / temporal options
+                for shrink in grid['similarity_shrinkage_lambda']:
+                    for trunc in grid['truncate_negative']:
+                        if model_type.startswith('temporal'):
+                            for hl in grid['temporal_half_life']:
+                                for floor in grid['temporal_decay_floor']:
+                                    for on_sim in grid['temporal_decay_on_similarity']:
+                                        combo = base.copy()
+                                        combo.update({
+                                            'similarity_shrinkage_lambda': shrink,
+                                            'truncate_negative': trunc,
+                                            'temporal_half_life': hl,
+                                            'temporal_decay_floor': floor,
+                                            'temporal_decay_on_similarity': on_sim
+                                        })
+                                        combinations.append(combo)
+                        else:
+                            combo = base.copy()
+                            combo.update({
+                                'similarity_shrinkage_lambda': shrink,
+                                'truncate_negative': trunc
+                            })
+                            combinations.append(combo)
         return combinations
 
     def _prepare_encoding_metadata(self) -> None:
@@ -293,23 +316,38 @@ class AcademicHyperparameterOptimizer:
         rng = np.random.default_rng(self.config.cv_random_state)
 
         for _ in range(self.config.n_iter_random_search):
-            model_type = rng.choice(['user_cf', 'item_cf'])
+            model_type = rng.choice(['user_cf', 'item_cf', 'temporal_user_cf', 'temporal_item_cf'])
             if model_type == 'user_cf':
                 k_neighbors = rng.choice(grid['user_k_neighbors'])
                 similarity_metric = rng.choice(grid['user_similarity_metrics'])
-            else:
+            elif model_type == 'item_cf':
+                k_neighbors = rng.choice(grid['item_k_neighbors'])
+                similarity_metric = rng.choice(grid['item_similarity_metrics'])
+            elif model_type == 'temporal_user_cf':
+                k_neighbors = rng.choice(grid['user_k_neighbors'])
+                similarity_metric = rng.choice(grid['user_similarity_metrics'])
+            else:  # temporal_item_cf
                 k_neighbors = rng.choice(grid['item_k_neighbors'])
                 similarity_metric = rng.choice(grid['item_similarity_metrics'])
 
-            combinations.append({
+            params = {
                 'model_type': model_type,
                 'k_neighbors': int(k_neighbors),
                 'similarity_metric': str(similarity_metric),
                 'min_ratings_per_user': int(rng.choice(grid['min_ratings_per_user'])),
                 'min_ratings_per_item': int(rng.choice(grid['min_ratings_per_item'])),
                 'train_ratio': float(rng.choice(grid['train_ratio'])),
-                'prediction_threshold': float(rng.choice(grid['prediction_threshold']))
-            })
+                'prediction_threshold': float(rng.choice(grid['prediction_threshold'])),
+                'similarity_shrinkage_lambda': float(rng.choice(grid['similarity_shrinkage_lambda'])),
+                'truncate_negative': bool(rng.choice(grid['truncate_negative']))
+            }
+            if model_type.startswith('temporal'):
+                params.update({
+                    'temporal_half_life': float(rng.choice(grid['temporal_half_life'])),
+                    'temporal_decay_floor': float(rng.choice(grid['temporal_decay_floor'])),
+                    'temporal_decay_on_similarity': bool(rng.choice(grid['temporal_decay_on_similarity']))
+                })
+            combinations.append(params)
 
         return combinations
 
@@ -322,7 +360,12 @@ class AcademicHyperparameterOptimizer:
             'min_ratings_per_user': self.config.min_ratings_per_user_range,
             'min_ratings_per_item': self.config.min_ratings_per_item_range,
             'train_ratio': self.config.train_ratio_range,
-            'prediction_threshold': self.config.prediction_threshold_range
+            'prediction_threshold': self.config.prediction_threshold_range,
+            'similarity_shrinkage_lambda': self.config.similarity_shrinkage_lambda_values,
+            'truncate_negative': self.config.truncate_negative_options,
+            'temporal_half_life': self.config.temporal_half_life_range,
+            'temporal_decay_floor': self.config.temporal_decay_floor_range,
+            'temporal_decay_on_similarity': self.config.temporal_decay_on_similarity_options
         }
 
     # ------------------------------------------------------------------
@@ -599,9 +642,25 @@ class AcademicHyperparameterOptimizer:
             fold_timestamps = temp_loader.timestamp_matrix
 
             try:
+                model_params = {
+                    'similarity_metric': params['similarity_metric'],
+                    'k_neighbors': params['k_neighbors']
+                }
+                # Thread-through temporal where applicable
+                if params.get('model_type', '').startswith('temporal'):
+                    model_params.update({
+                        'half_life': params.get('temporal_half_life', cfg.model.temporal_decay_half_life),
+                        'decay_floor': params.get('temporal_decay_floor', cfg.model.temporal_decay_floor)
+                    })
+
+                # Apply global config knobs for similarity regularisation
+                cfg.model.similarity_shrinkage_lambda = params.get('similarity_shrinkage_lambda', cfg.model.similarity_shrinkage_lambda)
+                cfg.model.truncate_negative_similarity = params.get('truncate_negative', cfg.model.truncate_negative_similarity)
+                cfg.model.temporal_decay_on_similarity = params.get('temporal_decay_on_similarity', cfg.model.temporal_decay_on_similarity)
+
                 model = build_cf_model(
                     params['model_type'],
-                    {'similarity_metric': params['similarity_metric'], 'k_neighbors': params['k_neighbors']},
+                    model_params,
                     backend=self.model_backend,
                     device=self.model_device
                 )

@@ -54,6 +54,15 @@ class HyperparameterConfig:
     # General model parameters
     prediction_threshold_range: List[float] = None
 
+    # Similarity regularisation (neighborhood models)
+    similarity_shrinkage_lambda_values: List[float] = None
+    truncate_negative_options: List[bool] = None
+
+    # Temporal CF parameters
+    temporal_half_life_range: List[float] = None
+    temporal_decay_floor_range: List[float] = None
+    temporal_decay_on_similarity_options: List[bool] = None
+
     # Search algorithm parameters
     n_iter_random_search: int = 100  # For random search
     n_initial_points: int = 10       # For Bayesian optimization
@@ -114,6 +123,20 @@ class HyperparameterConfig:
         if self.prediction_threshold_range is None:
             self.prediction_threshold_range = [2.5, 3.0, 3.5, 4.0]
 
+        # Defaults for similarity regularisation
+        if self.similarity_shrinkage_lambda_values is None:
+            self.similarity_shrinkage_lambda_values = [0.0, 10.0, 25.0, 50.0]
+        if self.truncate_negative_options is None:
+            self.truncate_negative_options = [False, True]
+
+        # Defaults for temporal parameters
+        if self.temporal_half_life_range is None:
+            self.temporal_half_life_range = [14.0, 30.0, 60.0, 90.0]
+        if self.temporal_decay_floor_range is None:
+            self.temporal_decay_floor_range = [0.0, 0.05, 0.1]
+        if self.temporal_decay_on_similarity_options is None:
+            self.temporal_decay_on_similarity_options = [True, False]
+
         if self.secondary_objectives is None:
             self.secondary_objectives = []
 
@@ -171,6 +194,8 @@ class DataConfig:
     movies_file: str = "movies.csv"
     train_ratio: float = 0.8
     test_ratio: float = 0.2
+    # Data splitting strategy: 'random', 'temporal_user', or 'temporal_global'
+    split_strategy: str = "random"
     min_ratings_per_user: int = 5
     min_ratings_per_item: int = 5
 
@@ -190,11 +215,15 @@ class ModelConfig:
     prediction_threshold: float = 3.0
     backend: str = "numpy"           # numpy, torch
     device: str = "cpu"              # cpu, cuda, cuda:0, etc.
+    # Similarity regularisation
+    similarity_shrinkage_lambda: float = 0.0  # >0 enables significance shrinkage
+    truncate_negative_similarity: bool = False
 
     # Temporal enhancement parameters
     temporal_decay_half_life: float = 30.0  # days
     temporal_decay_strategy: str = "exponential"
     temporal_decay_floor: float = 0.05
+    temporal_decay_on_similarity: bool = True  # apply decay before computing similarity
 
 @dataclass
 class EvaluationConfig:

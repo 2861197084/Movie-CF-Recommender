@@ -86,7 +86,9 @@ class BaseCollaborativeFiltering(ABC):
         """
         pass
 
-    def compute_similarity_matrix(self, data_matrix: csr_matrix) -> np.ndarray:
+    def compute_similarity_matrix(self, data_matrix: csr_matrix, counts_matrix: Optional[np.ndarray] = None,
+                                  shrinkage_lambda: Optional[float] = None,
+                                  truncate_negative: bool = False) -> np.ndarray:
         """
         Compute similarity matrix between users or items
 
@@ -113,6 +115,16 @@ class BaseCollaborativeFiltering(ABC):
 
         else:
             raise ValueError(f"Unknown similarity metric: {self.similarity_metric}")
+
+        # Optional shrinkage by co-rating counts
+        if counts_matrix is not None and shrinkage_lambda is not None and shrinkage_lambda > 0:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=RuntimeWarning)
+                weight = counts_matrix / (counts_matrix + float(shrinkage_lambda))
+                similarity_matrix = similarity_matrix * weight
+
+        if truncate_negative:
+            similarity_matrix = np.where(similarity_matrix < 0, 0.0, similarity_matrix)
 
         # Set diagonal to 0 to avoid self-similarity
         np.fill_diagonal(similarity_matrix, 0)

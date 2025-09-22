@@ -186,9 +186,26 @@ class TemporalUserBasedCollaborativeFiltering(TemporalCollaborativeFilteringMixi
 
         self._compute_user_statistics()
         self._prepare_temporal_state(timestamp_matrix, (n_users, n_items))
-        self.temporally_weighted_matrix = self._apply_global_decay(user_item_matrix)
+        # Apply optional decay on similarity construction
+        if getattr(cfg.model, 'temporal_decay_on_similarity', True):
+            self.temporally_weighted_matrix = self._apply_global_decay(user_item_matrix)
+            base_matrix = self.temporally_weighted_matrix
+        else:
+            self.temporally_weighted_matrix = None
+            base_matrix = user_item_matrix
 
-        self.similarity_matrix = self.compute_similarity_matrix(self.temporally_weighted_matrix)
+        # Optional co-rating counts for shrinkage
+        co_counts = None
+        if base_matrix is not None:
+            bin_mat = (base_matrix > 0).astype(np.float64).toarray()
+            co_counts = bin_mat @ bin_mat.T
+
+        self.similarity_matrix = self.compute_similarity_matrix(
+            base_matrix,
+            counts_matrix=co_counts,
+            shrinkage_lambda=getattr(cfg.model, 'similarity_shrinkage_lambda', 0.0),
+            truncate_negative=getattr(cfg.model, 'truncate_negative_similarity', False)
+        )
         self.is_fitted = True
         logger.info("Temporal user-based CF model fitted successfully")
         return self
@@ -212,6 +229,9 @@ class TemporalUserBasedCollaborativeFiltering(TemporalCollaborativeFilteringMixi
             if rating <= 0:
                 continue
             neighbor_time = self.rating_timestamps.get((int(neighbor_idx), int(item_id)))
+            # Causality: skip future ratings strictly after target_time
+            if neighbor_time is not None and neighbor_time > target_time:
+                continue
             temporal_weight = self._temporal_similarity_weight(target_time, neighbor_time)
             combined_weight = similarity * temporal_weight
             if abs(combined_weight) < 1e-12:
@@ -259,10 +279,25 @@ class TemporalItemBasedCollaborativeFiltering(TemporalCollaborativeFilteringMixi
         n_users, n_items = user_item_matrix.shape
         self._compute_item_statistics()
         self._prepare_temporal_state(timestamp_matrix, (n_users, n_items))
-        self.temporally_weighted_matrix = self._apply_global_decay(user_item_matrix)
+        if getattr(cfg.model, 'temporal_decay_on_similarity', True):
+            self.temporally_weighted_matrix = self._apply_global_decay(user_item_matrix)
+            base_matrix = self.temporally_weighted_matrix
+        else:
+            self.temporally_weighted_matrix = None
+            base_matrix = user_item_matrix
 
-        item_user_matrix = self.temporally_weighted_matrix.T
-        self.similarity_matrix = self.compute_similarity_matrix(item_user_matrix)
+        item_user_matrix = base_matrix.T
+        co_counts = None
+        if item_user_matrix is not None:
+            bin_mat = (item_user_matrix > 0).astype(np.float64).toarray()
+            co_counts = bin_mat @ bin_mat.T
+
+        self.similarity_matrix = self.compute_similarity_matrix(
+            item_user_matrix,
+            counts_matrix=co_counts,
+            shrinkage_lambda=getattr(cfg.model, 'similarity_shrinkage_lambda', 0.0),
+            truncate_negative=getattr(cfg.model, 'truncate_negative_similarity', False)
+        )
         self.is_fitted = True
         logger.info("Temporal item-based CF model fitted successfully")
         return self
@@ -286,6 +321,8 @@ class TemporalItemBasedCollaborativeFiltering(TemporalCollaborativeFilteringMixi
             if rating <= 0:
                 continue
             neighbor_time = self.rating_timestamps.get((int(user_id), int(neighbor_idx)))
+            if neighbor_time is not None and neighbor_time > target_time:
+                continue
             temporal_weight = self._temporal_similarity_weight(target_time, neighbor_time)
             combined_weight = similarity * temporal_weight
             if abs(combined_weight) < 1e-12:

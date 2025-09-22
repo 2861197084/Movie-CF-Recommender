@@ -178,9 +178,16 @@ def run_baseline_experiments(logger, dataset_name: str = "ml-latest-small") -> D
         logger.log_phase(f"Training and Evaluating {model_name}")
 
         try:
-            # Train model
+            # Build train-only matrices to avoid leakage
+            from utils.data_loader import MovieLensLoader
+            train_loader = MovieLensLoader(cfg)
+            train_loader.ratings_df = train_df.copy()
+            train_matrix = train_loader.create_user_item_matrix()
+            train_timestamps = train_loader.timestamp_matrix
+
+            # Train model on train-only matrix
             start_time = time.time()
-            model.fit(user_item_matrix, timestamp_matrix=timestamp_matrix)
+            model.fit(train_matrix, timestamp_matrix=train_timestamps)
             training_time = time.time() - start_time
 
             logger.info(f"Model {model_name} trained in {training_time:.2f} seconds")
@@ -190,10 +197,10 @@ def run_baseline_experiments(logger, dataset_name: str = "ml-latest-small") -> D
             model_results = evaluator.comprehensive_evaluation(
                 model=model,
                 test_data=test_df,
-                user_item_matrix=user_item_matrix,
+                user_item_matrix=train_matrix,
                 k_values=cfg.evaluation.top_k_recommendations,
                 threshold=cfg.model.prediction_threshold,
-                data_loader=loader,
+                data_loader=train_loader,
                 train_data=train_df
             )
             evaluation_time = time.time() - start_time
@@ -557,6 +564,9 @@ def main():
                        help='Run quick test with smaller dataset/parameters')
     parser.add_argument('--no-download', action='store_true',
                        help='Disable automatic dataset download')
+    parser.add_argument('--split-strategy', type=str, default=None,
+                       choices=['random', 'temporal_user', 'temporal_global'],
+                       help='Data split strategy: random, temporal_user (per-user), or temporal_global (single cutoff)')
     parser.add_argument('--hyperparameter-search', action='store_true',
                        help='Run hyperparameter optimization instead of baseline experiments')
     parser.add_argument('--search-method', type=str, default='grid_search',
@@ -605,6 +615,9 @@ def main():
         cfg.evaluation.top_k_recommendations = [5, 10]
         # Use smallest dataset for quick test
         args.dataset = "ml-latest-small"
+
+    if args.split_strategy:
+        cfg.data.split_strategy = args.split_strategy
 
     # Configure hyperparameter search
     if args.hyperparameter_search:

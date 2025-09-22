@@ -50,25 +50,25 @@ class AcademicLogger:
 
         self.start_time = time.time()
 
-    def info(self, message: str):
-        """Log info message"""
-        self.logger.info(message)
+    def info(self, message: str, *args, **kwargs):
+        """Log info message (supports printf-style args)."""
+        self.logger.info(message, *args, **kwargs)
 
-    def debug(self, message: str):
-        """Log debug message"""
-        self.logger.debug(message)
+    def debug(self, message: str, *args, **kwargs):
+        """Log debug message (supports printf-style args)."""
+        self.logger.debug(message, *args, **kwargs)
 
-    def warning(self, message: str):
-        """Log warning message"""
-        self.logger.warning(message)
+    def warning(self, message: str, *args, **kwargs):
+        """Log warning message (supports printf-style args)."""
+        self.logger.warning(message, *args, **kwargs)
 
-    def error(self, message: str):
-        """Log error message"""
-        self.logger.error(message)
+    def error(self, message: str, *args, **kwargs):
+        """Log error message (supports printf-style args)."""
+        self.logger.error(message, *args, **kwargs)
 
-    def critical(self, message: str):
-        """Log critical message"""
-        self.logger.critical(message)
+    def critical(self, message: str, *args, **kwargs):
+        """Log critical message (supports printf-style args)."""
+        self.logger.critical(message, *args, **kwargs)
 
     def log_experiment_start(self, config: dict):
         """Log experiment start with configuration"""

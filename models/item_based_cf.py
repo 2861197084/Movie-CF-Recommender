@@ -69,10 +69,19 @@ class ItemBasedCollaborativeFiltering(BaseCollaborativeFiltering):
         # Compute item mean ratings (for mean-centering)
         self._compute_item_statistics()
 
-        # Compute item-item similarity matrix
-        # Transpose the matrix to get items × users for similarity computation
+        # Compute item-item similarity matrix with optional regularisation
         item_user_matrix = user_item_matrix.T
-        self.similarity_matrix = self.compute_similarity_matrix(item_user_matrix)
+        co_counts = None
+        if item_user_matrix is not None:
+            bin_mat = (item_user_matrix > 0).astype(np.float64).toarray()
+            co_counts = bin_mat @ bin_mat.T
+
+        self.similarity_matrix = self.compute_similarity_matrix(
+            item_user_matrix,
+            counts_matrix=co_counts,
+            shrinkage_lambda=getattr(cfg.model, 'similarity_shrinkage_lambda', 0.0),
+            truncate_negative=getattr(cfg.model, 'truncate_negative_similarity', False)
+        )
 
         self.is_fitted = True
         logger.info("Item-based CF model fitted successfully")

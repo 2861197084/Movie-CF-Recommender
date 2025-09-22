@@ -562,6 +562,9 @@ class MetricsEvaluator:
         if data_loader is not None and hasattr(data_loader, 'normalize_timestamp'):
             normalize_timestamp = data_loader.normalize_timestamp  # type: ignore[attr-defined]
 
+        skipped_total = 0
+        skipped_missing_user = 0
+        skipped_missing_item = 0
         for _, row in test_data.iterrows():
             original_user_id = row['userId']
             original_item_id = row['movieId']
@@ -571,7 +574,11 @@ class MetricsEvaluator:
             item_idx = item_mapping.get(original_item_id)
 
             if user_idx is None or item_idx is None:
-                logger.warning(f"User {original_user_id} or item {original_item_id} not in training data, skipping...")
+                skipped_total += 1
+                if user_idx is None:
+                    skipped_missing_user += 1
+                if item_idx is None:
+                    skipped_missing_item += 1
                 continue
 
             try:
@@ -608,6 +615,10 @@ class MetricsEvaluator:
                 np.array(y_true), np.array(y_pred)
             )
 
+        if skipped_total > 0:
+            logger.info(
+                f"Skipped {skipped_total} test pairs due to unseen entities (users: {skipped_missing_user}, items: {skipped_missing_item})."
+            )
         logger.info("Evaluating ranking performance...")
         unique_users = test_data['userId'].unique()
         sample_users = np.random.choice(unique_users, size=min(100, len(unique_users)), replace=False)

@@ -380,12 +380,69 @@ class MovieLensLoader:
 
         random_state = random_state or self.config.experiment.random_seed
 
-        train_df, test_df = train_test_split(
-            self.ratings_df,
-            test_size=self.config.data.test_ratio,
-            random_state=random_state,
-            stratify=None  # Could stratify by user or rating if needed
-        )
+        split_strategy = getattr(self.config.data, 'split_strategy', 'random')
+
+        if split_strategy == 'temporal_user':
+            # For each user, hold out the most recent fraction (by timestamp) as test
+            if 'timestamp' not in self.ratings_df.columns:
+                logger.warning("Timestamp column not found, falling back to random split")
+                train_df, test_df = train_test_split(
+                    self.ratings_df,
+                    test_size=self.config.data.test_ratio,
+                    random_state=random_state,
+                    stratify=None
+                )
+            else:
+                test_frac = self.config.data.test_ratio
+                df = self.ratings_df.copy()
+                df = df.sort_values(['userId', 'timestamp'])
+                train_parts = []
+                test_parts = []
+                for uid, g in df.groupby('userId', sort=False):
+                    if len(g) <= 1:
+                        train_parts.append(g)
+                        continue
+                    cut = max(1, int(len(g) * (1 - test_frac)))
+                    train_parts.append(g.iloc[:cut])
+                    test_parts.append(g.iloc[cut:])
+                train_df = pd.concat(train_parts, ignore_index=True)
+                test_df = pd.concat(test_parts, ignore_index=True) if test_parts else train_df.iloc[0:0].copy()
+        elif split_strategy == 'temporal_global':
+            # Hold out the most recent fraction by a single global time threshold
+            if 'timestamp' not in self.ratings_df.columns:
+                logger.warning("Timestamp column not found, falling back to random split")
+                train_df, test_df = train_test_split(
+                    self.ratings_df,
+                    test_size=self.config.data.test_ratio,
+                    random_state=random_state,
+                    stratify=None
+                )
+            else:
+                df = self.ratings_df.copy()
+                df = df.sort_values('timestamp')
+                # Determine global cutoff by train_ratio quantile
+                train_q = min(max(self.config.data.train_ratio, 0.0), 0.9999)
+                cutoff_time = float(df['timestamp'].quantile(train_q))
+                train_df = df[df['timestamp'] <= cutoff_time]
+                test_df = df[df['timestamp'] > cutoff_time]
+
+                # Safety: ensure non-empty test set by moving last row if needed
+                if len(test_df) == 0 and len(train_df) > 1:
+                    test_df = train_df.tail(1)
+                    train_df = train_df.iloc[:-1]
+
+                try:
+                    cutoff_dt = pd.to_datetime(cutoff_time, unit='s')
+                    logger.info(f"Global temporal split cutoff: {cutoff_time} ({cutoff_dt.isoformat()})")
+                except Exception:
+                    logger.info(f"Global temporal split cutoff: {cutoff_time}")
+        else:
+            train_df, test_df = train_test_split(
+                self.ratings_df,
+                test_size=self.config.data.test_ratio,
+                random_state=random_state,
+                stratify=None
+            )
 
         logger.info(f"Train set: {len(train_df)} ratings ({len(train_df)/len(self.ratings_df)*100:.1f}%)")
         logger.info(f"Test set: {len(test_df)} ratings ({len(test_df)/len(self.ratings_df)*100:.1f}%)")

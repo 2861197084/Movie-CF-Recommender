@@ -68,8 +68,19 @@ class UserBasedCollaborativeFiltering(BaseCollaborativeFiltering):
         # Compute user mean ratings (for mean-centering)
         self._compute_user_statistics()
 
-        # Compute user-user similarity matrix
-        self.similarity_matrix = self.compute_similarity_matrix(user_item_matrix)
+        # Optional co-rating counts for shrinkage
+        co_counts = None
+        if self.user_item_matrix is not None:
+            bin_mat = (self.user_item_matrix > 0).astype(np.float64).toarray()
+            co_counts = bin_mat @ bin_mat.T
+
+        # Compute user-user similarity matrix with optional regularisation
+        self.similarity_matrix = self.compute_similarity_matrix(
+            user_item_matrix,
+            counts_matrix=co_counts,
+            shrinkage_lambda=getattr(cfg.model, 'similarity_shrinkage_lambda', 0.0),
+            truncate_negative=getattr(cfg.model, 'truncate_negative_similarity', False)
+        )
 
         self.is_fitted = True
         logger.info("User-based CF model fitted successfully")
