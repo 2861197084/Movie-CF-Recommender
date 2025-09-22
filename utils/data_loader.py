@@ -436,6 +436,36 @@ class MovieLensLoader:
                     logger.info(f"Global temporal split cutoff: {cutoff_time} ({cutoff_dt.isoformat()})")
                 except Exception:
                     logger.info(f"Global temporal split cutoff: {cutoff_time}")
+        elif split_strategy == 'leave_one_out':
+            # Per-user leave-one-out: keep each user's latest rating in test (by timestamp if available)
+            if 'timestamp' not in self.ratings_df.columns:
+                logger.warning("Timestamp column not found for leave_one_out; falling back to random per-user")
+                parts = []
+                tests = []
+                for uid, g in self.ratings_df.groupby('userId'):
+                    if len(g) <= 1:
+                        parts.append(g)
+                        continue
+                    test_u = g.sample(n=1, random_state=random_state)
+                    train_u = g.drop(test_u.index)
+                    parts.append(train_u)
+                    tests.append(test_u)
+                train_df = pd.concat(parts, ignore_index=True) if parts else self.ratings_df.iloc[0:0].copy()
+                test_df = pd.concat(tests, ignore_index=True) if tests else self.ratings_df.iloc[0:0].copy()
+            else:
+                parts = []
+                tests = []
+                for uid, g in self.ratings_df.groupby('userId'):
+                    if len(g) <= 1:
+                        parts.append(g)
+                        continue
+                    g_sorted = g.sort_values('timestamp')
+                    test_u = g_sorted.tail(1)
+                    train_u = g_sorted.iloc[:-1]
+                    parts.append(train_u)
+                    tests.append(test_u)
+                train_df = pd.concat(parts, ignore_index=True) if parts else self.ratings_df.iloc[0:0].copy()
+                test_df = pd.concat(tests, ignore_index=True) if tests else self.ratings_df.iloc[0:0].copy()
         else:
             train_df, test_df = train_test_split(
                 self.ratings_df,

@@ -316,17 +316,11 @@ class AcademicHyperparameterOptimizer:
         rng = np.random.default_rng(self.config.cv_random_state)
 
         for _ in range(self.config.n_iter_random_search):
-            model_type = rng.choice(['user_cf', 'item_cf', 'temporal_user_cf', 'temporal_item_cf'])
+            model_type = rng.choice(['user_cf', 'item_cf'])
             if model_type == 'user_cf':
                 k_neighbors = rng.choice(grid['user_k_neighbors'])
                 similarity_metric = rng.choice(grid['user_similarity_metrics'])
-            elif model_type == 'item_cf':
-                k_neighbors = rng.choice(grid['item_k_neighbors'])
-                similarity_metric = rng.choice(grid['item_similarity_metrics'])
-            elif model_type == 'temporal_user_cf':
-                k_neighbors = rng.choice(grid['user_k_neighbors'])
-                similarity_metric = rng.choice(grid['user_similarity_metrics'])
-            else:  # temporal_item_cf
+            else:
                 k_neighbors = rng.choice(grid['item_k_neighbors'])
                 similarity_metric = rng.choice(grid['item_similarity_metrics'])
 
@@ -341,12 +335,12 @@ class AcademicHyperparameterOptimizer:
                 'similarity_shrinkage_lambda': float(rng.choice(grid['similarity_shrinkage_lambda'])),
                 'truncate_negative': bool(rng.choice(grid['truncate_negative']))
             }
-            if model_type.startswith('temporal'):
-                params.update({
-                    'temporal_half_life': float(rng.choice(grid['temporal_half_life'])),
-                    'temporal_decay_floor': float(rng.choice(grid['temporal_decay_floor'])),
-                    'temporal_decay_on_similarity': bool(rng.choice(grid['temporal_decay_on_similarity']))
-                })
+            # Extended similarity knobs for neighborhood models
+            params['similarity_significance_cap'] = int(rng.choice([50, 100]))
+            params['similarity_case_amplification'] = float(rng.choice([1.1, 1.2, 1.3]))
+            params['similarity_top_k'] = int(rng.choice([80, 100, 150]))
+            if model_type == 'user_cf':
+                params['use_iuf'] = True
             combinations.append(params)
 
         return combinations

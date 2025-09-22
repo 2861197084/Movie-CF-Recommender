@@ -565,8 +565,8 @@ def main():
     parser.add_argument('--no-download', action='store_true',
                        help='Disable automatic dataset download')
     parser.add_argument('--split-strategy', type=str, default=None,
-                       choices=['random', 'temporal_user', 'temporal_global'],
-                       help='Data split strategy: random, temporal_user (per-user), or temporal_global (single cutoff)')
+                       choices=['random', 'temporal_user', 'temporal_global', 'leave_one_out'],
+                       help='Data split strategy: random, temporal_user (per-user), temporal_global (single cutoff), or leave_one_out (per-user)')
     parser.add_argument('--hyperparameter-search', action='store_true',
                        help='Run hyperparameter optimization instead of baseline experiments')
     parser.add_argument('--search-method', type=str, default='grid_search',

@@ -173,3 +173,4 @@ logs/
 results/
 plots/
 data/*.csv
+reports/

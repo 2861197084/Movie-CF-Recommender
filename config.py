@@ -204,11 +204,11 @@ class ModelConfig:
     """Model configuration parameters"""
     # User-based CF parameters
     user_similarity_metric: str = "cosine"  # cosine, pearson, jaccard
-    user_k_neighbors: int = 50
+    user_k_neighbors: int = 80
 
     # Item-based CF parameters
     item_similarity_metric: str = "cosine"  # cosine, pearson, jaccard
-    item_k_neighbors: int = 50
+    item_k_neighbors: int = 80
 
     # General parameters
     rating_scale: Tuple[float, float] = (0.5, 5.0)
@@ -216,8 +216,15 @@ class ModelConfig:
     backend: str = "numpy"           # numpy, torch
     device: str = "cpu"              # cpu, cuda, cuda:0, etc.
     # Similarity regularisation
-    similarity_shrinkage_lambda: float = 0.0  # >0 enables significance shrinkage
+    similarity_shrinkage_lambda: float = 25.0  # >0 enables significance shrinkage
     truncate_negative_similarity: bool = False
+    # Additional similarity post-processing options
+    similarity_significance_cap: Optional[int] = 50   # cap co-rating counts in [0,cap]
+    similarity_case_amplification: Optional[float] = 1.2  # amplify |s|^alpha * sign(s)
+    similarity_top_k: Optional[int] = 100  # keep top-k similarities per row (others -> 0)
+    jaccard_fusion_alpha: float = 0.0  # 0..1; blend with binary jaccard: S=(1-a)S + aJ
+    # Inverse user frequency weighting (applied for user-user similarity)
+    use_iuf: bool = True
 
     # Temporal enhancement parameters
     temporal_decay_half_life: float = 30.0  # days

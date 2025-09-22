@@ -116,18 +116,63 @@ class BaseCollaborativeFiltering(ABC):
         else:
             raise ValueError(f"Unknown similarity metric: {self.similarity_metric}")
 
-        # Optional shrinkage by co-rating counts
+        # Optional significance cap (min(n/cap, 1))
+        cap = getattr(cfg.model, 'similarity_significance_cap', None)
+        if counts_matrix is not None and cap is not None and cap > 0:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=RuntimeWarning)
+                weight_cap = np.minimum(counts_matrix.astype(float) / float(cap), 1.0)
+                similarity_matrix = similarity_matrix * weight_cap
+
+        # Optional shrinkage by co-rating counts: n/(n+lambda)
         if counts_matrix is not None and shrinkage_lambda is not None and shrinkage_lambda > 0:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", category=RuntimeWarning)
-                weight = counts_matrix / (counts_matrix + float(shrinkage_lambda))
+                weight = counts_matrix.astype(float) / (counts_matrix.astype(float) + float(shrinkage_lambda))
                 similarity_matrix = similarity_matrix * weight
 
         if truncate_negative:
             similarity_matrix = np.where(similarity_matrix < 0, 0.0, similarity_matrix)
 
+        # Optional case amplification |s|^alpha * sign(s)
+        case_amp = getattr(cfg.model, 'similarity_case_amplification', None)
+        if case_amp is not None:
+            try:
+                alpha = float(case_amp)
+                similarity_matrix = np.sign(similarity_matrix) * (np.abs(similarity_matrix) ** alpha)
+            except Exception:
+                pass
+
+        # Optional Jaccard fusion: S <- (1-a)S + aJ
+        fusion_alpha = float(getattr(cfg.model, 'jaccard_fusion_alpha', 0.0) or 0.0)
+        if fusion_alpha > 0.0:
+            try:
+                jacc = self._compute_jaccard_similarity(data_matrix)
+                similarity_matrix = (1.0 - fusion_alpha) * similarity_matrix + fusion_alpha * jacc
+            except Exception:
+                logger.warning("Jaccard fusion failed; proceeding without fusion")
+
         # Set diagonal to 0 to avoid self-similarity
         np.fill_diagonal(similarity_matrix, 0)
+
+        # Optional Top-K per row (keep largest absolute K)
+        topk = getattr(cfg.model, 'similarity_top_k', None)
+        if topk is not None and isinstance(topk, int) and topk > 0:
+            try:
+                S = similarity_matrix
+                n = S.shape[0]
+                for i in range(n):
+                    row = S[i]
+                    if topk < n:
+                        # indices of top-k by absolute value
+                        idx = np.argpartition(-np.abs(row), kth=min(topk, len(row)-1))[:topk]
+                        mask = np.ones_like(row, dtype=bool)
+                        mask[idx] = False
+                        row[mask] = 0.0
+                        S[i] = row
+                similarity_matrix = S
+            except Exception:
+                logger.warning("Top-K sparsification failed; keeping dense similarities")
 
         logger.info(f"Similarity matrix computed: {similarity_matrix.shape}")
         return similarity_matrix

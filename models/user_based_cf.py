@@ -74,9 +74,24 @@ class UserBasedCollaborativeFiltering(BaseCollaborativeFiltering):
             bin_mat = (self.user_item_matrix > 0).astype(np.float64).toarray()
             co_counts = bin_mat @ bin_mat.T
 
-        # Compute user-user similarity matrix with optional regularisation
+        # Optional IUF weighting (column-wise)
+        if getattr(cfg.model, 'use_iuf', False):
+            bin_mat = (self.user_item_matrix > 0).astype(np.float64)
+            item_counts = np.asarray(bin_mat.sum(axis=0)).ravel()
+            n_users = self.user_item_matrix.shape[0]
+            with np.errstate(divide='ignore', invalid='ignore'):
+                iuf = np.log(np.maximum(1.0, float(n_users)) / (1.0 + item_counts))
+                iuf[np.isinf(iuf)] = 0.0
+                iuf[np.isnan(iuf)] = 0.0
+            # scale columns by iuf
+            scaled = self.user_item_matrix.toarray() * iuf
+            sim_input = csr_matrix(scaled)
+        else:
+            sim_input = user_item_matrix
+
+        # Compute user-user similarity matrix with optional regularisation and post-processing
         self.similarity_matrix = self.compute_similarity_matrix(
-            user_item_matrix,
+            sim_input,
             counts_matrix=co_counts,
             shrinkage_lambda=getattr(cfg.model, 'similarity_shrinkage_lambda', 0.0),
             truncate_negative=getattr(cfg.model, 'truncate_negative_similarity', False)
